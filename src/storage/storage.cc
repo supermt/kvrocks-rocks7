@@ -782,6 +782,22 @@ bool Storage::ExistCheckpoint(void) {
 
 bool Storage::ExistSyncCheckpoint(void) { return env_->FileExists(config_->sync_checkpoint_dir).ok(); }
 
+Status Storage::IngestFile(const std::string &column_family, const std::vector<std::string> &target_uri_list) {
+  auto cfd = this->GetCFHandle(column_family);
+  rocksdb::IngestExternalFileOptions ing_options;
+  ing_options.allow_blocking_flush = false;
+  auto start_ms = env_->NowMicros();
+  auto s = db_->IngestExternalFile(cfd, target_uri_list, ing_options);
+  auto end_ms = env_->NowMicros();
+
+  if (s.ok()) {
+    LOG(INFO) << "Ingestion completed, time(ms) take: " << end_ms - start_ms;
+    return Status::OK();
+  }
+
+  return Status::NotOK;
+}
+
 Status Storage::ReplDataManager::CleanInvalidFiles(Storage *storage, const std::string &dir,
                                                    std::vector<std::string> valid_files) {
   if (!storage->env_->FileExists(dir).ok()) {

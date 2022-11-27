@@ -158,6 +158,8 @@ class Storage {
   std::string GetReplIdFromWalBySeq(rocksdb::SequenceNumber seq);
   std::string GetReplIdFromDbEngine(void);
 
+  Status IngestFile(const std::string &column_family_name, const std::vector<std::string> &target_file_uri_list);
+
  private:
   rocksdb::DB *db_ = nullptr;
   std::string replid_;
