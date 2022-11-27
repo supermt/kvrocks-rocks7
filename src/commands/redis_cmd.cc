@@ -4833,6 +4833,32 @@ class CommandCluster : public Commander {
   ImportStatus state_ = kImportNone;
 };
 
+class CommandIngestion : public Commander {
+ public:
+  Status Parse(const std::vector<std::string> &args) override {
+    if (args.size() <= 3) {
+      return Status(Status::RedisParseErr,
+                    "Too few arguments, usage: ingestion <column family name>  file file1 file2 file3 ....");
+    }
+    auto arg_iter = args_.begin();
+    column_family = args_[1];
+
+    for (uint32_t i = 2; i < args_.size(); i++) {
+      target_file_uri_list.push_back(args_[i]);
+    }
+    return Status::OK();
+  }
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    auto s = svr->storage_->IngestFile(column_family, target_file_uri_list);
+    // this command does not need the connection;
+    if (!s.IsOK()) return s;
+    return Status::OK();
+  }
+
+ private:
+  std::string column_family;
+  std::vector<std::string> target_file_uri_list;
+};
 class CommandClusterX : public Commander {
  public:
   Status Parse(const std::vector<std::string> &args) override {
@@ -6091,6 +6117,7 @@ const CommandAttributes redisCommandTable[]{
 
     MakeCmdAttr<CommandCluster>("cluster", -2, "cluster no-script", 0, 0, 0),
     MakeCmdAttr<CommandClusterX>("clusterx", -2, "cluster no-script", 0, 0, 0),
+    MakeCmdAttr<CommandIngestion>("ingest", -3, "command to ingest files", 0, 0, 0),
 
     MakeCmdAttr<CommandEval>("eval", -3, "exclusive write no-script", 0, 0, 0),
     MakeCmdAttr<CommandEvalSHA>("evalsha", -3, "exclusive write no-script", 0, 0, 0),

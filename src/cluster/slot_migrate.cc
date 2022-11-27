@@ -285,53 +285,121 @@ Status SlotMigrate::SendSnapshot() {
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
   read_options.fill_cache = false;
-  rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle("metadata");
+  rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+  rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
   std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
 
   // Construct key prefix to iterate the keys belong to the target slot
   std::string prefix;
   ComposeSlotKeyPrefix(namespace_, slot, &prefix);
   LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
+  iter->Seek(prefix);
 
-  // Seek to the beginning of keys start with 'prefix' and iterate all these keys
+  uint64_t start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  Slice begin = iter->key();
+
+  std::string ns, user_key_str;
+  ExtractNamespaceKey(begin, &ns, &user_key_str, true);
+  Slice user_key_begin(user_key_str);
+
+  Slice end;
   for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
-    // The migrating task has to be stopped, if server role is changed from master to slave
-    // or flush command (flushdb or flushall) is executed
-    if (stop_migrate_) {
-      LOG(ERROR) << "[migrate] Stop migrating snapshot due to the thread stopped";
-      return Status(Status::NotOK);
-    }
-
-    // Iteration is out of range
-    if (!iter->key().starts_with(prefix)) {
-      break;
-    }
-
-    // Get user key
-    std::string ns, user_key;
-    ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
-    current_migrate_key_ = user_key;
-
-    // Add key's constructed cmd to restore_cmds, send pipeline
-    // or not according to current_pipeline_size_
-    auto stat = MigrateOneKey(user_key, iter->value(), &restore_cmds);
-    if (stat.IsOK()) {
-      if (stat.Msg() == "ok") migratedkey_cnt++;
-      if (stat.Msg() == "expired") expiredkey_cnt++;
-      if (stat.Msg() == "empty") emptykey_cnt++;
-    } else {
-      LOG(ERROR) << "[migrate] Failed to migrate key: " << user_key;
-      return Status(Status::NotOK);
-    }
+    end = iter->key();
+    if (!iter->key().starts_with(prefix)) break;
   }
+  ExtractNamespaceKey(end, &ns, &user_key_str, true);
+  Slice user_key_end(user_key_str);
 
-  // Send the rest data in pipeline. This operation is necessary,
-  // the final pipeline may not be sent while iterating keys,
-  // because its size may less than pipeline_size_limit_.
-  if (!SendCmdsPipelineIfNeed(&restore_cmds, true)) {
-    LOG(ERROR) << "[migrate] Failed to send left data in pipeline";
+  uint64_t end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  // Slice begin = iter->Seek(prefix);
+  // Slice end("end_key");
+
+  LOG(INFO) << "Slot range collected[Meta and user], time(ms) take: " << end_ms - start_ms;
+  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  rocksdb::CompactRangeOptions range_option;
+  std::vector<std::string> meta_ssts;
+  auto s = storage_->GetDB()->CompactRange(range_option, cf_handle, &begin, &end, &meta_ssts);
+  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+
+  LOG(INFO) << "Range Compaction finished [Metadata], time(ms) take: " << end_ms - start_ms;
+
+  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  std::vector<std::string> data_ssts;
+  s = storage_->GetDB()->CompactRange(range_option, default_cf_handle, &user_key_begin, &user_key_end, &data_ssts);
+  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  if (!s.ok()) {
+    LOG(ERROR) << "[migrate] Stop migrating snapshot due to compaction error";
     return Status(Status::NotOK);
   }
+
+  LOG(INFO) << "Range Compaction finished [User], time(ms) take: " << end_ms - start_ms;
+
+  // use the file system to do the migration
+
+  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  auto env_ = storage_->GetDB()->GetEnv();
+  std::string host_name_string;
+  env_->GetHostNameString(&host_name_string);
+
+  std::string ingestion_command = "ingest ";
+  ingestion_command.append(Engine::kMetadataColumnFamilyName);
+
+  for (auto file_name : meta_ssts) {
+    // send uri to target system.
+    // assume the hdfs_env will generate the uri for it first.
+    ingestion_command.append(" " + file_name);
+  }
+  auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+  if (!cmd_status.IsOK()) {
+    // this command can not be completed in pipeline or async
+    LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+    return cmd_status;
+  }
+  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  LOG(INFO) << "Moving meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+
+  // Data get compacted
+  /*
+    // Seek to the beginning of keys start with 'prefix' and iterate all these keys
+    for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
+      // The migrating task has to be stopped, if server role is changed from master to slave
+      // or flush command (flushdb or flushall) is executed
+      if (stop_migrate_) {
+        LOG(ERROR) << "[migrate] Stop migrating snapshot due to the thread stopped";
+        return Status(Status::NotOK);
+      }
+
+      // Iteration is out of range
+      if (!iter->key().starts_with(prefix)) {
+        break;
+      }
+
+      // Get user key
+      std::string ns, user_key;
+      ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
+      current_migrate_key_ = user_key;
+
+      // Add key's constructed cmd to restore_cmds, send pipeline
+      // or not according to current_pipeline_size_
+      auto stat = MigrateOneKey(user_key, iter->value(), &restore_cmds);
+      if (stat.IsOK()) {
+        if (stat.Msg() == "ok") migratedkey_cnt++;
+        if (stat.Msg() == "expired") expiredkey_cnt++;
+        if (stat.Msg() == "empty") emptykey_cnt++;
+      } else {
+        LOG(ERROR) << "[migrate] Failed to migrate key: " << user_key;
+        return Status(Status::NotOK);
+      }
+    }
+
+    // Send the rest data in pipeline. This operation is necessary,
+    // the final pipeline may not be sent while iterating keys,
+    // because its size may less than pipeline_size_limit_.
+    if (!SendCmdsPipelineIfNeed(&restore_cmds, true)) {
+      LOG(ERROR) << "[migrate] Failed to send left data in pipeline";
+      return Status(Status::NotOK);
+    }
+    */
 
   LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " << migratedkey_cnt
             << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
