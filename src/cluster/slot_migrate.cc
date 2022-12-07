@@ -336,7 +336,6 @@ Status SlotMigrate::SendSnapshot() {
 
   // use the file system to do the migration
 
-  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
   auto env_ = storage_->GetDB()->GetEnv();
   std::string host_name_string;
   env_->GetHostNameString(&host_name_string);
@@ -349,6 +348,8 @@ Status SlotMigrate::SendSnapshot() {
     // assume the hdfs_env will generate the uri for it first.
     ingestion_command.append(" " + file_name);
   }
+  // Migrate start
+  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
   auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
   if (!cmd_status.IsOK()) {
     // this command can not be completed in pipeline or async
@@ -356,7 +357,28 @@ Status SlotMigrate::SendSnapshot() {
     return cmd_status;
   }
   end_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  LOG(INFO) << "Moving meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+  LOG(INFO) << "Ingest meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+
+  // Migrate start
+  ingestion_command = "ingest ";
+  ingestion_command.append(Engine::kSubkeyColumnFamilyName);
+
+  for (auto file_name : data_ssts) {
+    ingestion_command.append(" " + file_name);
+  }
+
+  cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+  if (!cmd_status.IsOK()) {
+    // this command can not be completed in pipeline or async
+    LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+    return cmd_status;
+  }
+  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  LOG(INFO) << "Ingest data pack, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+
+  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " << migratedkey_cnt
+            << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
+  return Status::OK();
 
   // Data get compacted
   /*
@@ -400,10 +422,11 @@ Status SlotMigrate::SendSnapshot() {
       return Status(Status::NotOK);
     }
     */
-
-  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " << migratedkey_cnt
-            << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
-  return Status::OK();
+  //
+  //  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " <<
+  //  migratedkey_cnt
+  //            << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
+  //  return Status::OK();
 }
 
 Status SlotMigrate::SyncWal() {
