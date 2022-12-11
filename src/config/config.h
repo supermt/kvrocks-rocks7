@@ -135,6 +135,7 @@ struct Config {
 
   bool slot_id_encoded = false;
   bool cluster_enabled = false;
+  bool batch_migrate = false;
   int migrate_speed;
   int pipeline_size;
   int sequence_gap;

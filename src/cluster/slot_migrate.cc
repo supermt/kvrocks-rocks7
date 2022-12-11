@@ -280,8 +280,6 @@ Status SlotMigrate::SendSnapshot() {
   uint64_t migratedkey_cnt = 0, expiredkey_cnt = 0, emptykey_cnt = 0;
   std::string restore_cmds;
   int16_t slot = migrate_slot_;
-  LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
-
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
   read_options.fill_cache = false;
@@ -289,99 +287,99 @@ Status SlotMigrate::SendSnapshot() {
   rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
   std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
 
-  // Construct key prefix to iterate the keys belong to the target slot
   std::string prefix;
   ComposeSlotKeyPrefix(namespace_, slot, &prefix);
   LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
+  LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
   iter->Seek(prefix);
 
-  uint64_t start_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  Slice begin = iter->key();
+  if (svr_->GetConfig()->batch_migrate) {
+    LOG(INFO) << "migrating by batch";
 
-  std::string ns, user_key_str;
-  ExtractNamespaceKey(begin, &ns, &user_key_str, true);
-  Slice user_key_begin(user_key_str);
+    // Construct key prefix to iterate the keys belong to the target slot
+    uint64_t start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    Slice begin = iter->key();
+    std::string ns, user_key_str;
+    ExtractNamespaceKey(begin, &ns, &user_key_str, true);
+    Slice user_key_begin(user_key_str);
 
-  Slice end;
-  for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
-    end = iter->key();
-    if (!iter->key().starts_with(prefix)) break;
-  }
-  ExtractNamespaceKey(end, &ns, &user_key_str, true);
-  Slice user_key_end(user_key_str);
+    Slice end;
+    for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
+      end = iter->key();
+      if (!iter->key().starts_with(prefix)) break;
+    }
+    ExtractNamespaceKey(end, &ns, &user_key_str, true);
+    Slice user_key_end(user_key_str);
 
-  uint64_t end_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  // Slice begin = iter->Seek(prefix);
-  // Slice end("end_key");
+    uint64_t end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    // Slice begin = iter->Seek(prefix);
+    // Slice end("end_key");
 
-  LOG(INFO) << "Slot range collected[Meta and user], time(ms) take: " << end_ms - start_ms;
-  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  rocksdb::CompactRangeOptions range_option;
-  std::vector<std::string> meta_ssts;
-  auto s = storage_->GetDB()->CompactRange(range_option, cf_handle, &begin, &end, &meta_ssts);
-  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    LOG(INFO) << "Slot range collected[Meta and user], time(ms) take: " << end_ms - start_ms;
+    start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    rocksdb::CompactRangeOptions range_option;
+    std::vector<std::string> meta_ssts;
+    auto s = storage_->GetDB()->CompactRange(range_option, cf_handle, &begin, &end, &meta_ssts);
+    end_ms = storage_->GetDB()->GetEnv()->NowMicros();
 
-  LOG(INFO) << "Range Compaction finished [Metadata], time(ms) take: " << end_ms - start_ms;
+    LOG(INFO) << "Range Compaction finished [Metadata], time(ms) take: " << end_ms - start_ms;
 
-  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  std::vector<std::string> data_ssts;
-  s = storage_->GetDB()->CompactRange(range_option, default_cf_handle, &user_key_begin, &user_key_end, &data_ssts);
-  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  if (!s.ok()) {
-    LOG(ERROR) << "[migrate] Stop migrating snapshot due to compaction error";
-    return Status(Status::NotOK);
-  }
+    start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    std::vector<std::string> data_ssts;
+    s = storage_->GetDB()->CompactRange(range_option, default_cf_handle, &user_key_begin, &user_key_end, &data_ssts);
+    end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    if (!s.ok()) {
+      LOG(ERROR) << "[migrate] Stop migrating snapshot due to compaction error";
+      return Status(Status::NotOK);
+    }
 
-  LOG(INFO) << "Range Compaction finished [User], time(ms) take: " << end_ms - start_ms;
+    LOG(INFO) << "Range Compaction finished [User], time(ms) take: " << end_ms - start_ms;
 
-  // use the file system to do the migration
+    // use the file system to do the migration
 
-  auto env_ = storage_->GetDB()->GetEnv();
-  std::string host_name_string;
-  env_->GetHostNameString(&host_name_string);
+    auto env_ = storage_->GetDB()->GetEnv();
+    std::string host_name_string;
+    env_->GetHostNameString(&host_name_string);
 
-  std::string ingestion_command = "ingest ";
-  ingestion_command.append(Engine::kMetadataColumnFamilyName);
+    std::string ingestion_command = "ingest ";
+    ingestion_command.append(Engine::kMetadataColumnFamilyName);
 
-  for (auto file_name : meta_ssts) {
-    // send uri to target system.
-    // assume the hdfs_env will generate the uri for it first.
-    ingestion_command.append(" " + file_name);
-  }
-  // Migrate start
-  start_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
-  if (!cmd_status.IsOK()) {
-    // this command can not be completed in pipeline or async
-    LOG(ERROR) << "Migration error, the system is broken while ingestion.";
-    return cmd_status;
-  }
-  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  LOG(INFO) << "Ingest meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+    for (auto file_name : meta_ssts) {
+      // send uri to target system.
+      // assume the hdfs_env will generate the uri for it first.
+      ingestion_command.append(" " + file_name);
+    }
+    // Migrate start
+    start_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+    if (!cmd_status.IsOK()) {
+      // this command can not be completed in pipeline or async
+      LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+      return cmd_status;
+    }
+    end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    LOG(INFO) << "Ingest meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
 
-  // Migrate start
-  ingestion_command = "ingest ";
-  ingestion_command.append(Engine::kSubkeyColumnFamilyName);
+    // Migrate start
+    ingestion_command = "ingest ";
+    ingestion_command.append(Engine::kSubkeyColumnFamilyName);
 
-  for (auto file_name : data_ssts) {
-    ingestion_command.append(" " + file_name);
-  }
+    for (auto file_name : data_ssts) {
+      ingestion_command.append(" " + file_name);
+    }
 
-  cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
-  if (!cmd_status.IsOK()) {
-    // this command can not be completed in pipeline or async
-    LOG(ERROR) << "Migration error, the system is broken while ingestion.";
-    return cmd_status;
-  }
-  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
-  LOG(INFO) << "Ingest data pack, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+    cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+    if (!cmd_status.IsOK()) {
+      // this command can not be completed in pipeline or async
+      LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+      return cmd_status;
+    }
+    end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+    LOG(INFO) << "Ingest data pack, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+    return Status::OK();
+  } else {
+    LOG(INFO) << "migrating by iteration";
 
-  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " << migratedkey_cnt
-            << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
-  return Status::OK();
-
-  // Data get compacted
-  /*
     // Seek to the beginning of keys start with 'prefix' and iterate all these keys
     for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
       // The migrating task has to be stopped, if server role is changed from master to slave
@@ -421,12 +419,11 @@ Status SlotMigrate::SendSnapshot() {
       LOG(ERROR) << "[migrate] Failed to send left data in pipeline";
       return Status(Status::NotOK);
     }
-    */
-  //
-  //  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " <<
-  //  migratedkey_cnt
-  //            << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
-  //  return Status::OK();
+  }
+
+  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot << ", Migrated keys: " << migratedkey_cnt
+            << ", Expired keys: " << expiredkey_cnt << ", Emtpy keys: " << emptykey_cnt;
+  return Status::OK();
 }
 
 Status SlotMigrate::SyncWal() {

@@ -152,6 +152,7 @@ Config::Config() {
       {"auto-resize-block-and-sst", false, new YesNoField(&auto_resize_block_and_sst, true)},
       {"fullsync-recv-file-delay", false, new IntField(&fullsync_recv_file_delay, 0, 0, INT_MAX)},
       {"cluster-enabled", true, new YesNoField(&cluster_enabled, false)},
+      {"batch-migration", true, new YesNoField(&batch_migrate, false)},
       {"migrate-speed", false, new IntField(&migrate_speed, 4096, 0, INT_MAX)},
       {"migrate-pipeline-size", false, new IntField(&pipeline_size, 16, 1, INT_MAX)},
       {"migrate-sequence-gap", false, new IntField(&sequence_gap, 10000, 1, INT_MAX)},

@@ -4840,7 +4840,6 @@ class CommandIngestion : public Commander {
       return Status(Status::RedisParseErr,
                     "Too few arguments, usage: ingestion <column family name>  file file1 file2 file3 ....");
     }
-    auto arg_iter = args_.begin();
     column_family = args_[1];
 
     for (uint32_t i = 2; i < args_.size(); i++) {
