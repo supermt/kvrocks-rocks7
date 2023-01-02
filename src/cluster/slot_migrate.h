@@ -108,6 +108,9 @@ class SlotMigrate : public Redis::Database {
   void StateMachine(void);
   Status Start(void);
   Status SendSnapshot(void);
+  Status SendSnapShotByBatch(void);
+  Status SendSnapShotByIteration(void);
+
   Status SyncWal(void);
   Status Success(void);
   Status Fail(void);
