@@ -25,11 +25,13 @@ endif()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(rocksdb
-  supermt/rocksdb-for-kvrocks cmake_updated
-#  facebook/rocksdb v7.7.3
-  MD5=63cd7ff6754d0da7a0c019b778ba1907
-)
+#FetchContent_DeclareGitHubWithMirror(rocksdb
+#  supermt/rocksdb-for-kvrocks cmake_updated
+##  facebook/rocksdb v7.7.3
+#  MD5=63cd7ff6754d0da7a0c019b778ba1907
+#)
+FetchContent_Declare(rocksdb
+        GIT_REPOSITORY https://github.com/supermt/rocksdb-for-kvrocks.git)
 
 FetchContent_GetProperties(jemalloc)
 FetchContent_GetProperties(snappy)
