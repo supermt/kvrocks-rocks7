@@ -109,6 +109,8 @@ class SlotMigrate : public Redis::Database {
   Status Start(void);
   Status SendSnapshot(void);
   Status SendSnapShotByBatch(void);
+  Status SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro, Slice *meta_begin, Slice *meta_end,
+                             Slice *data_begin, Slice *data_end);
   Status SendSnapShotByIteration(void);
   Status SendSnapshotAuto(void);
 

@@ -153,6 +153,8 @@ Config::Config() {
       {"fullsync-recv-file-delay", false, new IntField(&fullsync_recv_file_delay, 0, 0, INT_MAX)},
       {"cluster-enabled", true, new YesNoField(&cluster_enabled, false)},
       {"batch-migration", true, new IntField(&batch_migrate, 0,0,2)},
+      {"migration-threshold-level", true, new IntField(&migration_threshold_level_num, 3,0,INT_MAX)},
+      {"migration-threshold-file", true, new IntField(&migration_threshold_file_num, 5,0,INT_MAX)},
       {"migrate-speed", false, new IntField(&migrate_speed, 4096, 0, INT_MAX)},
       {"migrate-pipeline-size", false, new IntField(&pipeline_size, 16, 1, INT_MAX)},
       {"migrate-sequence-gap", false, new IntField(&sequence_gap, 10000, 1, INT_MAX)},

@@ -925,10 +925,46 @@ void SlotMigrate::GetMigrateInfo(std::string *info) {
   *info = "migrating_slot: " + std::to_string(slot) + "\r\n" + "destination_node: " + dst_node_ + "\r\n" +
           "migrating_state: " + task_state + "\r\n";
 }
-
-
 Status SlotMigrate::SendSnapShotByBatch() {
-  uint64_t migratedkey_cnt = 0, expiredkey_cnt = 0, emptykey_cnt = 0;
+  int16_t slot = migrate_slot_;
+  rocksdb::ReadOptions read_options;
+  read_options.snapshot = slot_snapshot_;
+  read_options.fill_cache = false;
+  rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+  std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
+
+  std::string prefix;
+  ComposeSlotKeyPrefix(namespace_, slot, &prefix);
+  LOG(INFO) << "[batch migration] Iterate meta key, key's prefix: " << prefix;
+  LOG(INFO) << "[batch migration] Start migrating snapshot of slot " << slot;
+  iter->Seek(prefix);
+  auto env = storage_->GetDB()->GetEnv();
+  // Construct key prefix to iterate the keys belong to the target slot
+  Slice begin = iter->key();
+  std::string ns, user_key_str;
+  ExtractNamespaceKey(begin, &ns, &user_key_str, true);
+  Slice user_key_begin(user_key_str);
+
+  Slice end;
+  auto start_ms = env->NowMicros();
+
+  for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
+    end = iter->key();
+    if (!iter->key().starts_with(prefix)) break;
+  }
+  ExtractNamespaceKey(end, &ns, &user_key_str, true);
+  Slice user_key_end(user_key_str);
+  auto end_ms = env->NowMicros();
+
+  LOG(INFO) << "[batch migration] collect metadata time (ms) " << end_ms - start_ms;
+
+  rocksdb::CompactRangeOptions cro;
+  return SendSnapShotByBatch(cro, &begin, &end, &user_key_begin, &user_key_end);
+}
+
+Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
+                                        Slice *meta_begin, Slice *meta_end,
+                                        Slice *data_begin, Slice *data_end) {
   std::string restore_cmds;
   int16_t slot = migrate_slot_;
   rocksdb::ReadOptions read_options;
@@ -936,55 +972,30 @@ Status SlotMigrate::SendSnapShotByBatch() {
   read_options.fill_cache = false;
   rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
   rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
-  std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
 
-  std::string prefix;
-  ComposeSlotKeyPrefix(namespace_, slot, &prefix);
-  LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
-  LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
-  iter->Seek(prefix);
-
-  LOG(INFO) << "Batch Migration";
   auto env = storage_->GetDB()->GetEnv();
   // Construct key prefix to iterate the keys belong to the target slot
   uint64_t start_ms = env->NowMicros();
-  Slice begin = iter->key();
-  std::string ns, user_key_str;
-  ExtractNamespaceKey(begin, &ns, &user_key_str, true);
-  Slice user_key_begin(user_key_str);
 
-  Slice end;
-  for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
-    end = iter->key();
-    if (!iter->key().starts_with(prefix)) break;
-  }
-  ExtractNamespaceKey(end, &ns, &user_key_str, true);
-  Slice user_key_end(user_key_str);
-
-  uint64_t end_ms = env->NowMicros();
-  // Slice begin = iter->Seek(prefix);
-  // Slice end("end_key");
-
-  LOG(INFO) << "Slot range collected[Meta and user], time(ms) take: " << end_ms - start_ms;
   start_ms = env->NowMicros();
   rocksdb::CompactRangeOptions range_option;
   std::vector<std::string> meta_ssts;
-  auto s = storage_->GetDB()->CompactRange(range_option, cf_handle, &begin, &end, &meta_ssts);
-  end_ms = env->NowMicros();
+  auto s = storage_->GetDB()->CompactRange(range_option, cf_handle, meta_begin, meta_end, &meta_ssts);
+  uint64_t end_ms = env->NowMicros();
 
   LOG(INFO) << "Range Compaction finished [Metadata], time(ms) take: " << end_ms - start_ms;
 
   start_ms = env->NowMicros();
   std::vector<std::string> data_ssts;
-  s = storage_->GetDB()->CompactRange(range_option, default_cf_handle, &user_key_begin, &user_key_end, &data_ssts);
+  s = storage_->GetDB()->CompactRange(range_option, default_cf_handle, data_begin, data_end, &data_ssts);
   end_ms = env->NowMicros();
+
+  LOG(INFO) << "Range Compaction finished [User], time(ms) take: " << end_ms - start_ms;
 
   if (!s.ok()) {
     LOG(ERROR) << "[migrate] Stop migrating snapshot due to compaction error";
-    return Status(Status::NotOK);
+    return Status::NotOK;
   }
-
-  LOG(INFO) << "Range Compaction finished [User], time(ms) take: " << end_ms - start_ms;
 
   // use the file system to do the migration
 
@@ -992,40 +1003,42 @@ Status SlotMigrate::SendSnapShotByBatch() {
   std::string host_name_string;
   env_->GetHostNameString(&host_name_string);
 
-  std::string ingestion_command = "ingest ";
+  std::string ingestion_command = "";
   ingestion_command.append(Engine::kMetadataColumnFamilyName);
 
+  start_ms = env->NowMicros();
   for (auto file_name : meta_ssts) {
     // send uri to target system.
     // assume the hdfs_env will generate the uri for it first.
-    ingestion_command.append(" " + file_name);
+    ingestion_command = "ingest " + file_name;
+    auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+    if (!cmd_status.IsOK()) {
+      // this command can not be completed in pipeline or async
+      LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+      return cmd_status;
+    }
   }
   // Migrate start
-  start_ms = env->NowMicros();
-  auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
-  if (!cmd_status.IsOK()) {
-    // this command can not be completed in pipeline or async
-    LOG(ERROR) << "Migration error, the system is broken while ingestion.";
-    return cmd_status;
-  }
   end_ms = env->NowMicros();
+
   LOG(INFO) << "Ingest meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
 
   // Migrate start
   ingestion_command = "ingest ";
   ingestion_command.append(Engine::kSubkeyColumnFamilyName);
 
+  start_ms = env->NowMicros();
   for (auto file_name : data_ssts) {
-    ingestion_command.append(" " + file_name);
+    ingestion_command = "ingest " + file_name;
+    auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+    if (!cmd_status.IsOK()) {
+      // this command can not be completed in pipeline or async
+      LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+      return cmd_status;
+    }
   }
 
-  cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
-  if (!cmd_status.IsOK()) {
-    // this command can not be completed in pipeline or async
-    LOG(ERROR) << "Migration error, reason:" << cmd_status.Msg();
-    return cmd_status;
-  }
-  end_ms = storage_->GetDB()->GetEnv()->NowMicros();
+  end_ms = env->NowMicros();
   LOG(INFO) << "Ingest data pack, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
 
   LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, total SSTables";
@@ -1097,23 +1110,6 @@ Status SlotMigrate::SendSnapShotByIteration() {
 }
 
 Status SlotMigrate::SendSnapshot() {
-  // Create DB iter of snapshot
-  uint64_t migratedkey_cnt = 0, expiredkey_cnt = 0, emptykey_cnt = 0;
-  std::string restore_cmds;
-  int16_t slot = migrate_slot_;
-  rocksdb::ReadOptions read_options;
-  read_options.snapshot = slot_snapshot_;
-  read_options.fill_cache = false;
-  rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
-  rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
-  std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
-
-  std::string prefix;
-  ComposeSlotKeyPrefix(namespace_, slot, &prefix);
-  LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
-  LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
-  iter->Seek(prefix);
-
   switch (svr_->GetConfig()->batch_migrate) {
     case 0:
       return SendSnapShotByIteration();
@@ -1125,21 +1121,22 @@ Status SlotMigrate::SendSnapshot() {
       return Status::NotOK;
   }
 }
+
 Status SlotMigrate::SendSnapshotAuto() {
   int16_t slot = migrate_slot_;
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
   read_options.fill_cache = false;
-  rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
-  rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
-  std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
+  rocksdb::ColumnFamilyHandle *meta_cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+  rocksdb::ColumnFamilyHandle *data_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
+  std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, meta_cf_handle));
   std::string prefix;
   ComposeSlotKeyPrefix(namespace_, slot, &prefix);
   LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
   LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
   iter->Seek(prefix);
 
-  Slice meta_begin,meta_end;
+  Slice meta_begin, meta_end;
   std::string ns, user_key_str;
   ExtractNamespaceKey(meta_begin, &ns, &user_key_str, true);
   Slice user_key_begin(user_key_str);
@@ -1157,12 +1154,28 @@ Status SlotMigrate::SendSnapshotAuto() {
     }
     meta_end = iter->key();
   }
-  ExtractNamespaceKey(meta_end,&ns,&user_key_str,true);
+  ExtractNamespaceKey(meta_end, &ns, &user_key_str, true);
   Slice user_key_end(user_key_str);
   // Now check the distribution of target device
   auto db_ptr = storage_->GetDB();
   auto env = db_ptr->GetEnv();
   // overhead in double iterating the metadata cf.
 
+  rocksdb::CompactRangeOptions range_option;
+  std::vector<std::pair<int, int>> compact_range_size;
+  rocksdb::Status s =
+      db_ptr->EstimateCompactRange(range_option, data_cf_handle, &user_key_begin, &user_key_end, &compact_range_size);
+  if (!s.ok()) {
+    return Status::NotOK;
+  }
+
+  int total_files = 0;
+  for (auto pair : compact_range_size) {
+    total_files += pair.second;
+  }
+
+  if (compact_range_size.size() >= svr_->GetConfig()->migration_threshold_level_num ||
+      total_files >= svr_->GetConfig()->migration_threshold_file_num) {
+  }
   return Status::OK();
 }
