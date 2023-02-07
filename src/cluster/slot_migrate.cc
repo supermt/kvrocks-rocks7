@@ -710,7 +710,12 @@ bool SlotMigrate::SendCmdsPipelineIfNeed(std::string *commands, bool need) {
   MigrateSpeedLimit();
 
   // Send pipeline
+  auto start = Util::GetTimeStampMS();
+
   auto s = Util::SockSend(slot_job_->slot_fd_, *commands);
+
+  auto end = Util::GetTimeStampMS();
+  LOG(INFO) << "[migrate] Sending commands Time (ms):" << end - start;
   if (!s.IsOK()) {
     LOG(ERROR) << "[migrate] Failed to send commands, Err: " << s.Msg();
     return false;
@@ -962,17 +967,14 @@ Status SlotMigrate::SendSnapShotByBatch() {
   return SendSnapShotByBatch(cro, &begin, &end, &user_key_begin, &user_key_end);
 }
 
-Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
-                                        Slice *meta_begin, Slice *meta_end,
+Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro, Slice *meta_begin, Slice *meta_end,
                                         Slice *data_begin, Slice *data_end) {
   std::string restore_cmds;
-  int16_t slot = migrate_slot_;
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
   read_options.fill_cache = false;
   rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
   rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
-
   auto env = storage_->GetDB()->GetEnv();
   // Construct key prefix to iterate the keys belong to the target slot
   uint64_t start_ms = env->NowMicros();
@@ -1054,7 +1056,6 @@ Status SlotMigrate::SendSnapShotByIteration() {
   read_options.snapshot = slot_snapshot_;
   read_options.fill_cache = false;
   rocksdb::ColumnFamilyHandle *cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
-  rocksdb::ColumnFamilyHandle *default_cf_handle = storage_->GetCFHandle(Engine::kSubkeyColumnFamilyName);
   std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
 
   std::string prefix;
@@ -1110,6 +1111,10 @@ Status SlotMigrate::SendSnapShotByIteration() {
 }
 
 Status SlotMigrate::SendSnapshot() {
+  const std::string migration_methods[4] = {"Seek-and-Insert", "Compact-and-Merge", "Plain-hybrid", "Level-based"};
+  auto migration_method = svr_->GetConfig()->batch_migrate;
+  LOG(INFO) << "[migrate] Start sending snapshot, migration method: " << migration_methods[migration_method]
+            << ", migrating slot: " << migrate_slot_;
   switch (svr_->GetConfig()->batch_migrate) {
     case 0:
       return SendSnapShotByIteration();
@@ -1158,7 +1163,6 @@ Status SlotMigrate::SendSnapshotAuto() {
   Slice user_key_end(user_key_str);
   // Now check the distribution of target device
   auto db_ptr = storage_->GetDB();
-  auto env = db_ptr->GetEnv();
   // overhead in double iterating the metadata cf.
 
   rocksdb::CompactRangeOptions range_option;
@@ -1174,8 +1178,12 @@ Status SlotMigrate::SendSnapshotAuto() {
     total_files += pair.second;
   }
 
-  if (compact_range_size.size() >= svr_->GetConfig()->migration_threshold_level_num ||
+  if (compact_range_size.size() >= (long unsigned int)svr_->GetConfig()->migration_threshold_level_num ||
       total_files >= svr_->GetConfig()->migration_threshold_file_num) {
+    // go for range compaction
+    SendSnapShotByBatch(range_option, &meta_begin, &meta_end, &user_key_begin, &user_key_end);
+  } else {
+    SendSnapShotByIteration();
   }
   return Status::OK();
 }

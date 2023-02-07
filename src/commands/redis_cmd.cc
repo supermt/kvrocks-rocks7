@@ -4836,29 +4836,50 @@ class CommandCluster : public Commander {
 class CommandIngestion : public Commander {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-    if (args.size() <= 3) {
+    if (args.size() != 3) {
       return Status(Status::RedisParseErr,
-                    "Too few arguments, usage: ingestion <column family name>  file file1 file2 file3 ....");
+                    "Too few arguments, usage: ingestion <column family name>  true/false file/data_pack");
     }
     column_family = args_[1];
-
-    for (uint32_t i = 2; i < args_.size(); i++) {
-      target_file_uri_list.push_back(args_[i]);
-    }
+    std::istringstream(args_[2]) >> is_file_uri;
     return Status::OK();
   }
 
   Status Execute(Server *svr, Connection *conn, std::string *output) override {
-    auto s = svr->storage_->IngestFile(column_family, target_file_uri_list);
-    // this command does not need the connection;
-    if (!s.IsOK()) return s;
-    return Status::OK();
+    std::vector<std::string> target_file_uri_list;
+    if (is_file_uri) {
+      target_file_uri_list.push_back(target_file_uri);
+      auto s = svr->storage_->IngestFile(column_family, target_file_uri_list);
+      // this command does not need the connection;
+      if (!s.IsOK()) return s;
+      return Status::OK();
+    } else {
+      auto ingest_file_dir = svr->GetConfig()->ingest_data_path;
+      auto env = svr->storage_->GetDB()->GetEnv();
+      auto s = env->CreateDirIfMissing(ingest_file_dir);
+      if (!s.ok()) {
+        return {Status::NotOK,"Can not create dir"};
+      }
+      std::string temp_file_name = std::to_string(env->NowMicros());
+      FILE* temp_file = fopen(temp_file_name.c_str(),"w");
+      fwrite(this->data_pack.data(),1,data_pack.size(),temp_file);
+      fclose(temp_file);
+      auto s_ = svr->storage_->IngestFile(column_family,target_file_uri_list);
+      if (!s_.IsOK()) {
+    //    return {Status::NotOK,"Can not ingest"};
+        return s_;
+      }
+    }
+    return {Status::NotOK, "Unexpected quit"};
   }
 
  private:
   std::string column_family;
-  std::vector<std::string> target_file_uri_list;
+  std::string target_file_uri;
+  std::string data_pack;
+  bool is_file_uri;
 };
+
 class CommandClusterX : public Commander {
  public:
   Status Parse(const std::vector<std::string> &args) override {
