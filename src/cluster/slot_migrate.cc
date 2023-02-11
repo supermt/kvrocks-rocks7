@@ -20,6 +20,7 @@
 
 #include "slot_migrate.h"
 
+#include <fstream>
 #include <memory>
 #include <utility>
 
@@ -1025,13 +1026,21 @@ Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
 
   LOG(INFO) << "Ingest meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
 
+  std::string ingestion_command_head = "ingest ";
+  ingestion_command_head.append(Engine::kSubkeyColumnFamilyName);
+  ingestion_command_head.append(" true ");
   // Migrate start
-  ingestion_command = "ingest ";
-  ingestion_command.append(Engine::kSubkeyColumnFamilyName);
 
   start_ms = env->NowMicros();
   for (auto file_name : data_ssts) {
-    ingestion_command = "ingest " + file_name;
+    ingestion_command = ingestion_command_head + file_name +" ";
+
+    std::ifstream ifs(file_name.c_str(), std::ios::binary|std::ios::ate);
+    std::ifstream::pos_type pos = ifs.tellg();
+    std::vector<char>  result(pos);
+    ifs.seekg(0, std::ios::beg);
+    ifs.read(&result[0], pos);
+    ingestion_command.insert(ingestion_command.end(),result.begin(),result.end());
     auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
     if (!cmd_status.IsOK()) {
       // this command can not be completed in pipeline or async
