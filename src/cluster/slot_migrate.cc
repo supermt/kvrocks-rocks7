@@ -366,7 +366,8 @@ bool SlotMigrate::SetDstImportStatus(int sock_fd, int status) {
   std::string cmd = Redis::MultiBulkString({"cluster", "import", std::to_string(slot), std::to_string(status)});
   auto s = Util::SockSend(sock_fd, cmd);
   if (!s.IsOK()) {
-    LOG(ERROR) << "[migrate] Failed to send import command to destination, slot: " << slot << ", error: " << s.Msg();
+    LOG(ERROR) << "[migrate] Failed to send import command to destination, slot: " << slot << ", error: "
+               << s.Msg();
     return false;
   }
 
@@ -1194,5 +1195,11 @@ Status SlotMigrate::SendSnapshotAuto() {
   } else {
     SendSnapShotByIteration();
   }
+  return Status::OK();
+}
+
+Status SlotMigrate::SendSnapshotLevel() {
+
+//  int agent_fd;
   return Status::OK();
 }
