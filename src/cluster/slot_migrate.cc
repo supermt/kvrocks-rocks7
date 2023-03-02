@@ -366,8 +366,7 @@ bool SlotMigrate::SetDstImportStatus(int sock_fd, int status) {
   std::string cmd = Redis::MultiBulkString({"cluster", "import", std::to_string(slot), std::to_string(status)});
   auto s = Util::SockSend(sock_fd, cmd);
   if (!s.IsOK()) {
-    LOG(ERROR) << "[migrate] Failed to send import command to destination, slot: " << slot << ", error: "
-               << s.Msg();
+    LOG(ERROR) << "[migrate] Failed to send import command to destination, slot: " << slot << ", error: " << s.Msg();
     return false;
   }
 
@@ -1034,14 +1033,14 @@ Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
 
   start_ms = env->NowMicros();
   for (auto file_name : data_ssts) {
-    ingestion_command = ingestion_command_head + file_name +" ";
+    ingestion_command = ingestion_command_head + file_name + " ";
 
-    std::ifstream ifs(file_name.c_str(), std::ios::binary|std::ios::ate);
+    std::ifstream ifs(file_name.c_str(), std::ios::binary | std::ios::ate);
     std::ifstream::pos_type pos = ifs.tellg();
-    std::vector<char>  result(pos);
+    std::vector<char> result(pos);
     ifs.seekg(0, std::ios::beg);
     ifs.read(&result[0], pos);
-    ingestion_command.insert(ingestion_command.end(),result.begin(),result.end());
+    ingestion_command.insert(ingestion_command.end(), result.begin(), result.end());
     auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
     if (!cmd_status.IsOK()) {
       // this command can not be completed in pipeline or async
@@ -1199,7 +1198,39 @@ Status SlotMigrate::SendSnapshotAuto() {
 }
 
 Status SlotMigrate::SendSnapshotLevel() {
+  int agent_fd = -1;
+  auto svr_config = svr_->GetConfig();
+  auto env = storage_->GetDB()->GetEnv();
+  auto start = env->NowMicros();
+  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
 
-//  int agent_fd;
+  if (!s.IsOK()) {
+    LOG(ERROR) << "[Migration] Failed to connect migration agent" << s.Msg();
+  }
+  std::stringstream migrate_cmd;
+  // Command format
+  // source_db_path\n
+  // source_ip\n
+  migrate_cmd << storage_->GetDB()->GetName() << "\n";
+  std::string prefix;
+  ComposeSlotKeyPrefix(namespace_, migrate_slot_, &prefix);
+  // Seek this in the metadata
+  migrate_cmd << dst_ip_ << "\n";
+  migrate_cmd << dst_port_ << "\n";
+  migrate_cmd << prefix << "\n";
+  migrate_cmd << Engine::kMetadataColumnFamilyName;
+  migrate_cmd << Engine::kSubkeyColumnFamilyName;
+
+  s = Util::SockSend(agent_fd, migrate_cmd.str());
+  if (!s.IsOK()) {
+    return s;
+  }
+  std::string respond = "";
+  s = Util::SockReadLine(agent_fd, &respond);
+  if (!s.IsOK()) {
+    return s;
+  }
+  auto end = env->NowMicros();
+  LOG(INFO) << "[Agent Migration] finished, time (ms): " << end - start;
   return Status::OK();
 }

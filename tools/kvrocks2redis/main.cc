@@ -33,7 +33,6 @@
 #include "storage/storage.h"
 #include "sync.h"
 #include "version.h"
-
 const char *kDefaultConfPath = "./kvrocks2redis.conf";
 
 std::function<void()> hup_handler;
@@ -149,6 +148,8 @@ int main(int argc, char *argv[]) {
   kvrocks_config.cluster_enabled = config.cluster_enable;
 
   Engine::Storage storage(&kvrocks_config);
+
+
   s = storage.Open(true);
   if (!s.IsOK()) {
     LOG(ERROR) << "Failed to open: " << s.Msg();

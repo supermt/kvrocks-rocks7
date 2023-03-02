@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "cluster/cluster.h"
+#include "cluster/migration_agent.h"
 #include "cluster/replication.h"
 #include "cluster/slot_import.h"
 #include "cluster/slot_migrate.h"
@@ -281,6 +282,7 @@ class Server {
   TaskRunner task_runner_;
   std::vector<std::unique_ptr<WorkerThread>> worker_threads_;
   std::unique_ptr<ReplicationThread> replication_thread_;
+  std::unique_ptr<Engine::MigrationAgent> mg_agent;
 
   // memory
   int64_t memory_startup_use_ = 0;

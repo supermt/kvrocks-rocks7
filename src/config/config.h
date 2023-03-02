@@ -37,7 +37,8 @@
 class Server;
 namespace Engine {
 class Storage;
-}
+class MigrationAgent;
+}  // namespace Engine
 
 constexpr const uint16_t PORT_LIMIT = 65535;
 
