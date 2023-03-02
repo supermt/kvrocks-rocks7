@@ -215,6 +215,7 @@ class Server {
   static std::atomic<int> unix_time_;
   std::unique_ptr<class SlotMigrate> slot_migrate_;
   class SlotImport *slot_import_ = nullptr;
+  std::unique_ptr<Engine::MigrationAgent> mg_agent;
 
 #ifdef ENABLE_OPENSSL
   UniqueSSLContext ssl_ctx_;
@@ -282,7 +283,6 @@ class Server {
   TaskRunner task_runner_;
   std::vector<std::unique_ptr<WorkerThread>> worker_threads_;
   std::unique_ptr<ReplicationThread> replication_thread_;
-  std::unique_ptr<Engine::MigrationAgent> mg_agent;
 
   // memory
   int64_t memory_startup_use_ = 0;

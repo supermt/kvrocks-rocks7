@@ -1200,37 +1200,11 @@ Status SlotMigrate::SendSnapshotAuto() {
 Status SlotMigrate::SendSnapshotLevel() {
   int agent_fd = -1;
   auto svr_config = svr_->GetConfig();
-  auto env = storage_->GetDB()->GetEnv();
-  auto start = env->NowMicros();
-  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
+//  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
+  //  if (!s.IsOK()) {
+  //    LOG(ERROR) << "[Migration] Failed to connect migration agent" << s.Msg();
+  //  }
 
-  if (!s.IsOK()) {
-    LOG(ERROR) << "[Migration] Failed to connect migration agent" << s.Msg();
-  }
-  std::stringstream migrate_cmd;
-  // Command format
-  // source_db_path\n
-  // source_ip\n
-  migrate_cmd << storage_->GetDB()->GetName() << "\n";
-  std::string prefix;
-  ComposeSlotKeyPrefix(namespace_, migrate_slot_, &prefix);
-  // Seek this in the metadata
-  migrate_cmd << dst_ip_ << "\n";
-  migrate_cmd << dst_port_ << "\n";
-  migrate_cmd << prefix << "\n";
-  migrate_cmd << Engine::kMetadataColumnFamilyName;
-  migrate_cmd << Engine::kSubkeyColumnFamilyName;
-
-  s = Util::SockSend(agent_fd, migrate_cmd.str());
-  if (!s.IsOK()) {
-    return s;
-  }
-  std::string respond = "";
-  s = Util::SockReadLine(agent_fd, &respond);
-  if (!s.IsOK()) {
-    return s;
-  }
-  auto end = env->NowMicros();
-  LOG(INFO) << "[Agent Migration] finished, time (ms): " << end - start;
+  svr_->mg_agent.get()->publish_agent_command(dst_ip_, dst_port_, migrate_slot_, namespace_, slot_snapshot_);
   return Status::OK();
 }

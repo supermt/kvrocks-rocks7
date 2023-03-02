@@ -22,8 +22,8 @@ class MigrationAgent : public Redis::Database {
   explicit MigrationAgent(Config* config, Storage* storage);
   //  ~MigrationAgent() { std::cout << "stop agent" << std::endl; }
 
-  Status publish_agent_command(std::string dst_ip, int dst_port, std::vector<std::string> cf_name, int migrate_slot,
-                               std::string namespace_, rocksdb::Snapshot* slot_snapshot_);
+  Status publish_agent_command(std::string dst_ip, int dst_port, int migrate_slot, std::string namespace_,
+                               const rocksdb::Snapshot* slot_snapshot_);
 
   struct SST_content {
     std::vector<std::pair<Slice, Slice>> meta_content;
@@ -43,16 +43,16 @@ class MigrationAgent : public Redis::Database {
   };
   //  typedef std::unordered_map<std::string, std::vector<std::pair<Slice, Slice>>*> SST_content;
   //  typedef std::unordered_map<std::string, std::vector<std::string>> Ingestion_candidate;
-  void call_to_iterate_agent(int migrate_slot, std::string namespace_, rocksdb::Snapshot* slot_snapshot_);
+  void call_to_iterate_agent(int migrate_slot, std::string namespace_, const rocksdb::Snapshot* slot_snapshot_,
+                             std::string dst_ip, int dst_port);
   Status ExtractOneRecord(const rocksdb::Slice& key, const Slice& metadata, SST_content* result_bucket,
-                          rocksdb::Snapshot* slot_snapshot_);
+                          const rocksdb::Snapshot* slot_snapshot_);
   bool ExtractSimpleRecord(const rocksdb::Slice& key, const Slice& metadata, SST_content* result_bucket);
   bool ExtractComplexRecord(const rocksdb::Slice& key, const Metadata& metadata, SST_content* result_bucket,
-                            rocksdb::Snapshot* migration_snapshot);
+                            const rocksdb::Snapshot* migration_snapshot);
   Status DumpContentToSST(SST_content* result_bucket, Ingestion_candidate* sst_map, bool force);
   void call_to_level_agent();
   void call_to_batch_agent();
-
 
  private:
   const uint64_t min_aggregation_size = 64 * 1024l;

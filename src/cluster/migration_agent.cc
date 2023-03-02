@@ -16,23 +16,15 @@ MigrationAgent::MigrationAgent(Config* config, Storage* storage)
   auto s = rocksdb::DB::OpenForReadOnly(rocksdb::Options(), storage->GetDB()->GetName(), &db_ptr);
   assert(s.ok());
 }
-Status MigrationAgent::publish_agent_command(std::string dst_ip, int dst_port, std::vector<std::string> cf_name,
-                                             int migrate_slot, std::string namespace_,
-                                             rocksdb::Snapshot* slot_snapshot_) {
-  Status s;
-  int agent_fd = -1;
-  s = Util::SockConnect(dst_ip, dst_port, &agent_fd);
-  if (!s.IsOK()) {
-    LOG(ERROR) << "[Migration Agent] Connection failed" << std::endl;
-    return s;
-  }
+Status MigrationAgent::publish_agent_command(std::string dst_ip, int dst_port, int migrate_slot, std::string namespace_,
+                                             const rocksdb::Snapshot* slot_snapshot_) {
   // add the migration controller if needed
   std::thread* migration_worker = nullptr;
 
   switch (config_->batch_migrate) {
     case 0:
-      migration_worker =
-          new std::thread(&MigrationAgent::call_to_iterate_agent, this, migrate_slot, namespace_, slot_snapshot_);
+      migration_worker = new std::thread(&MigrationAgent::call_to_iterate_agent, this, migrate_slot, namespace_,
+                                         slot_snapshot_, dst_ip, dst_port);
       break;
     case 1:
       migration_worker = new std::thread(&MigrationAgent::call_to_batch_agent, this);
@@ -47,10 +39,10 @@ Status MigrationAgent::publish_agent_command(std::string dst_ip, int dst_port, s
 
   migration_worker->detach();
 
-  return s;
+  return Status::OK();
 }
 void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespace_,
-                                           rocksdb::Snapshot* slot_snapshot_) {
+                                           const rocksdb::Snapshot* slot_snapshot_, std::string dst_ip, int dst_port) {
   int16_t slot = migrate_slot;
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
@@ -97,12 +89,27 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
   DumpContentToSST(&temp_result, &migration_ssts, true);
 
   temp_result.clear();
+  int target_fd = -1;
+  auto s = Util::SockConnect(dst_ip, dst_port, &target_fd);
+
+  std::string command_head = "";
+  command_head = command_head + "ingest " + kMetadataColumnFamilyName + " true ";
+  for (auto file : migration_ssts.meta_ssts) {
+    std::string cmd = command_head + file;
+    s = Util::SockSend(target_fd, cmd);
+  }
+  command_head.clear();
+  command_head = command_head + "ingest " + kSubkeyColumnFamilyName + " true ";
+  for (auto file : migration_ssts.subkey_ssts) {
+    std::string cmd = command_head + file;
+    s = Util::SockSend(target_fd, cmd);
+  }
 
   LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot;
 }
 
 Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& meta_value, SST_content* result_bucket,
-                                        rocksdb::Snapshot* snapshot) {
+                                        const rocksdb::Snapshot* snapshot) {
   std::string prefix_key;
   AppendNamespacePrefix(key, &prefix_key);
   std::string bytes = meta_value.ToString();
@@ -151,7 +158,7 @@ bool MigrationAgent::ExtractSimpleRecord(const rocksdb::Slice& key, const Slice&
 }
 
 bool MigrationAgent::ExtractComplexRecord(const rocksdb::Slice& key, const Metadata& metadata,
-                                          SST_content* result_bucket, rocksdb::Snapshot* migration_snapshot) {
+                                          SST_content* result_bucket, const rocksdb::Snapshot* migration_snapshot) {
   rocksdb::ReadOptions read_opt;
   read_opt.snapshot = migration_snapshot;
   read_opt.fill_cache = false;  // we can make some changes here
