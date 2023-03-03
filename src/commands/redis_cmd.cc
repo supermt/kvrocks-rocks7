@@ -4841,12 +4841,12 @@ class CommandIngestion : public Commander {
 //    }
     column_family = args_[1];
     std::istringstream(args_[2]) >> is_file_uri;
+    target_file_uri = args_[3];
     if (is_file_uri){
         LOG(INFO) << "ingesting file: " << is_file_uri << std::endl;
-    	target_file_uri = args_[3];
     }else {
-         LOG(INFO) << "ingesting data_pack: " << data_pack.size() << std::endl;
-    	data_pack = args_[3];
+    	data_pack = args_[4];
+        LOG(INFO) << "ingesting data_pack: " << data_pack.size() << std::endl;
     
     }
     return Status::OK();
@@ -4855,7 +4855,7 @@ class CommandIngestion : public Commander {
   Status Execute(Server *svr, Connection *conn, std::string *output) override {
     std::vector<std::string> target_file_uri_list;
     if (is_file_uri) {
-      target_file_uri_list.push_back(target_file_uri);
+      target_file_uri_list.push_back("/home/jinghuan/tmp/"+target_file_uri);
       auto s = svr->storage_->IngestFile(column_family, target_file_uri_list);
       // this command does not need the connection;
       if (!s.IsOK()) return s;
@@ -4867,8 +4867,11 @@ class CommandIngestion : public Commander {
       if (!s.ok()) {
         return {Status::NotOK,"Can not create dir"};
       }
-      std::string temp_file_name = std::to_string(env->NowMicros());
-      FILE* temp_file = fopen(temp_file_name.c_str(),"w");
+      std::string sst_no_file = target_file_uri.substr(target_file_uri.size()-9,9);
+      LOG(INFO) <<"target file name:" << sst_no_file;
+
+      std::string temp_file_name = ingest_file_dir + "/" + sst_no_file;
+      FILE* temp_file = fopen(temp_file_name.c_str(),"a");
       fwrite(this->data_pack.data(),1,data_pack.size(),temp_file);
       fclose(temp_file);
 
