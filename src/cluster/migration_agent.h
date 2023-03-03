@@ -55,7 +55,7 @@ class MigrationAgent : public Redis::Database {
   void call_to_batch_agent();
 
  private:
-  const uint64_t min_aggregation_size = 64 * 1024l;
+  const uint64_t min_aggregation_size = 64 * 1024*  1024l;
   Config* config_;
   Storage* storage_;
   rocksdb::DB* db_ptr;

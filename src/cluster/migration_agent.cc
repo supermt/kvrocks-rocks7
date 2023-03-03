@@ -196,8 +196,10 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
 
   std::string meta_sst = "";
   std::string subkey_sst = "";
-  auto migration_dir = storage_->GetMigrationTemp();
+  std::string migration_dir = "/tmp/migration/";
   env_->CreateDirIfMissing(migration_dir);
+  meta_sst = migration_dir + "meta"+std::to_string(Util::GetTimeStampMS()) + ".sst";
+  subkey_sst = migration_dir +"subkey"+ std::to_string(Util::GetTimeStampMS()) + ".sst";
 
   if (force) {
     db_ptr->CreateTableBuilder(meta_cf->GetID(), meta_cf, -1, result_bucket->meta_content, meta_sst);
