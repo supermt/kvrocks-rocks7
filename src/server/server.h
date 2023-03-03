@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "cluster/cluster.h"
+#include "cluster/migration_agent.h"
 #include "cluster/replication.h"
 #include "cluster/slot_import.h"
 #include "cluster/slot_migrate.h"
@@ -214,6 +215,7 @@ class Server {
   static std::atomic<int> unix_time_;
   std::unique_ptr<class SlotMigrate> slot_migrate_;
   class SlotImport *slot_import_ = nullptr;
+  std::unique_ptr<Engine::MigrationAgent> mg_agent;
 
 #ifdef ENABLE_OPENSSL
   UniqueSSLContext ssl_ctx_;

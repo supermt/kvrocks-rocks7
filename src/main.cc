@@ -38,6 +38,7 @@
 #include <sys/un.h>
 #include <ucontext.h>
 
+#include "cluster/migration_agent.h"
 #include "config.h"
 #include "fd_util.h"
 #include "scope_exit.h"

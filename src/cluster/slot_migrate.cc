@@ -1059,6 +1059,7 @@ Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
     scp_command+=":/data/jinghua2/tmp/";
     system(scp_command.c_str());
     ingestion_command = ingestion_command_head + file_name;
+
     auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
 
 
@@ -1209,5 +1210,17 @@ Status SlotMigrate::SendSnapshotAuto() {
   } else {
     SendSnapShotByIteration();
   }
+  return Status::OK();
+}
+
+Status SlotMigrate::SendSnapshotLevel() {
+  int agent_fd = -1;
+  auto svr_config = svr_->GetConfig();
+//  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
+  //  if (!s.IsOK()) {
+  //    LOG(ERROR) << "[Migration] Failed to connect migration agent" << s.Msg();
+  //  }
+
+  svr_->mg_agent.get()->publish_agent_command(dst_ip_, dst_port_, migrate_slot_, namespace_, slot_snapshot_);
   return Status::OK();
 }

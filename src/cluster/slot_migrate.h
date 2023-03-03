@@ -113,6 +113,7 @@ class SlotMigrate : public Redis::Database {
                              Slice *data_begin, Slice *data_end);
   Status SendSnapShotByIteration(void);
   Status SendSnapshotAuto(void);
+  Status SendSnapshotLevel(void);
 
   Status SyncWal(void);
   Status Success(void);

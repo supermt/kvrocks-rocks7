@@ -153,6 +153,8 @@ Config::Config() {
       {"fullsync-recv-file-delay", false, new IntField(&fullsync_recv_file_delay, 0, 0, INT_MAX)},
       {"cluster-enabled", true, new YesNoField(&cluster_enabled, false)},
       {"batch-migration", true, new IntField(&batch_migrate, 0, 0, 2)},
+      {"migration-agent-ip", true, new StringField(&migration_agent_ip, "127.0.0.1")},
+      {"migration-agent-port", true, new IntField(&migration_agent_port, 12340, 0, INT_MAX)},
       {"migration-threshold-level", true, new IntField(&migration_threshold_level_num, 3, 0, INT_MAX)},
       {"migration-threshold-file", true, new IntField(&migration_threshold_file_num, 5, 0, INT_MAX)},
       {"migration-threshold-file", true, new StringField(&ingest_data_path, "")},

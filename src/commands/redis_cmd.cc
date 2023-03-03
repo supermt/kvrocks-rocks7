@@ -4833,6 +4833,42 @@ class CommandCluster : public Commander {
   ImportStatus state_ = kImportNone;
 };
 
+class PingMigrationAgent : public Commander {
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    int ping_fd = -1;
+    auto s = Util::SockConnect(svr->GetConfig()->migration_agent_ip, svr->GetConfig()->migration_agent_port, &ping_fd);
+    std::cout << "accessed" << std::endl;
+    if (!s.IsOK()) {
+      std::cout << "Can not access the agent," << svr->GetConfig()->migration_agent_ip << " : "
+                << svr->GetConfig()->migration_agent_port << std::endl;
+      return s;
+    }
+    if (args_.size() == 1) {
+      s = Util::SockSend(ping_fd, "PONG\n");
+      if (s.IsOK()) {
+        std::string result;
+
+        s = Util::SockReadLine(ping_fd, &result);
+        if (s.IsOK()) {
+          *output = Redis::SimpleString(result);
+        }
+      }
+      return s;
+    } else if (args_.size() == 2) {
+      s = Util::SockSend(ping_fd, args_[1] + "\n");
+
+      if (s.IsOK()) {
+        std::string result;
+        s = Util::SockReadLine(ping_fd, &result);
+        if (s.IsOK()) {
+          *output = Redis::SimpleString(result);
+        }
+      }
+    }
+    return Status::OK();
+  }
+};
+
 class CommandIngestion : public Commander {
  public:
   Status Parse(const std::vector<std::string> &args) override {
@@ -4865,8 +4901,9 @@ class CommandIngestion : public Commander {
       auto env = svr->storage_->GetDB()->GetEnv();
       auto s = env->CreateDirIfMissing(ingest_file_dir);
       if (!s.ok()) {
-        return {Status::NotOK,"Can not create dir"};
+        return {Status::NotOK, "Can not create dir"};
       }
+<<<<<<< HEAD
       std::string sst_no_file = target_file_uri.substr(target_file_uri.size()-9,9);
       LOG(INFO) <<"target file name:" << sst_no_file;
 
@@ -4877,8 +4914,15 @@ class CommandIngestion : public Commander {
 
       target_file_uri_list.push_back(temp_file_name);
       auto s_ = svr->storage_->IngestFile(column_family,target_file_uri_list);
+=======
+      std::string temp_file_name = std::to_string(env->NowMicros());
+      FILE *temp_file = fopen(temp_file_name.c_str(), "w");
+      fwrite(this->data_pack.data(), 1, data_pack.size(), temp_file);
+      fclose(temp_file);
+      auto s_ = svr->storage_->IngestFile(column_family, target_file_uri_list);
+>>>>>>> refs/remotes/origin/unstable
       if (!s_.IsOK()) {
-    //    return {Status::NotOK,"Can not ingest"};
+        //    return {Status::NotOK,"Can not ingest"};
         return s_;
       }
     }
@@ -6150,7 +6194,12 @@ const CommandAttributes redisCommandTable[]{
 
     MakeCmdAttr<CommandCluster>("cluster", -2, "cluster no-script", 0, 0, 0),
     MakeCmdAttr<CommandClusterX>("clusterx", -2, "cluster no-script", 0, 0, 0),
+<<<<<<< HEAD
     MakeCmdAttr<CommandIngestion>("ingest", -4, "command to ingest files", 0, 0, 0),
+=======
+    MakeCmdAttr<CommandIngestion>("ingest", -3, "command to ingest files", 0, 0, 0),
+    MakeCmdAttr<PingMigrationAgent>("ping_agent", -1, "read-only", 0, 0, 0),
+>>>>>>> refs/remotes/origin/unstable
 
     MakeCmdAttr<CommandEval>("eval", -3, "exclusive write no-script", 0, 0, 0),
     MakeCmdAttr<CommandEvalSHA>("evalsha", -3, "exclusive write no-script", 0, 0, 0),

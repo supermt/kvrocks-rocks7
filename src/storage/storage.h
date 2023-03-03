@@ -97,6 +97,7 @@ class Storage {
   rocksdb::DB *GetDB();
   bool IsClosing() { return db_closing_; }
   const std::string GetName() { return config_->db_name; }
+  const std::string GetMigrationTemp() { return config_->db_name + "/migration_temp/"; }
   rocksdb::ColumnFamilyHandle *GetCFHandle(const std::string &name);
   std::vector<rocksdb::ColumnFamilyHandle *> *GetCFHandles() { return &cf_handles_; }
   LockManager *GetLockManager() { return &lock_mgr_; }
