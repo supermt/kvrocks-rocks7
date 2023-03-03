@@ -1088,7 +1088,6 @@ Status SlotMigrate::SendSnapShotByIteration() {
   LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
   LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
   iter->Seek(prefix);
-  LOG(INFO) << "Iterate Migration";
 
   // Seek to the beginning of keys start with 'prefix' and iterate all these keys
   for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
@@ -1140,6 +1139,12 @@ Status SlotMigrate::SendSnapshot() {
   auto migration_method = svr_->GetConfig()->batch_migrate;
   LOG(INFO) << "[migrate] Start sending snapshot, migration method: " << migration_methods[migration_method]
             << ", migrating slot: " << migrate_slot_;
+
+  if (svr_->GetConfig()->agent_migration){
+	  LOG(INFO) << "Send to agent";
+      return SendSnapshotLevel();
+  }
+
   switch (svr_->GetConfig()->batch_migrate) {
     case 0:
       return SendSnapShotByIteration();
@@ -1214,8 +1219,6 @@ Status SlotMigrate::SendSnapshotAuto() {
 }
 
 Status SlotMigrate::SendSnapshotLevel() {
-  int agent_fd = -1;
-  auto svr_config = svr_->GetConfig();
 //  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
   //  if (!s.IsOK()) {
   //    LOG(ERROR) << "[Migration] Failed to connect migration agent" << s.Msg();

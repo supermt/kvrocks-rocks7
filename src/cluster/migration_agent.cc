@@ -13,6 +13,8 @@ MigrationAgent::MigrationAgent(Config* config, Storage* storage)
   LOG(INFO) << "[Migration Agent] @ " << ip_ << ":" << port_ << "creating" << std::endl;
   config_ = config;
   storage_ = storage;
+  db_ = storage_->GetDB();
+  env_ = db_->GetEnv();
   auto s = rocksdb::DB::OpenForReadOnly(rocksdb::Options(), storage->GetDB()->GetName(), &db_ptr);
   assert(s.ok());
 }
@@ -52,8 +54,8 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
   bool stop_migrate_ = false;
   std::string prefix;
   ComposeSlotKeyPrefix(namespace_, slot, &prefix);
-  LOG(INFO) << "[migrate] Iterate keys of slot, key's prefix: " << prefix;
-  LOG(INFO) << "[migrate] Start migrating snapshot of slot " << slot;
+  LOG(INFO) << "[Agent] Iterate keys of slot, key's prefix: " << prefix;
+  LOG(INFO) << "[Agent] Start migrating snapshot of slot " << slot;
   iter->Seek(prefix);
 
   std::cout << "data" << std::endl;
@@ -62,7 +64,7 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
 
   SST_content temp_result;
   Ingestion_candidate migration_ssts;
-
+  auto start = Util::GetTimeStampMS();
   // Seek to the beginning of keys start with 'prefix' and iterate all these keys
   for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
     // The migrating task has to be stopped, if server role is changed from master to slave
@@ -88,6 +90,10 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
   // flush all entries to SST
   DumpContentToSST(&temp_result, &migration_ssts, true);
 
+  auto end = Util::GetTimeStampMS();
+
+  LOG(INFO) << "[Agent] Iterate and SST dump finished, time (ms): " << end-start;
+
   temp_result.clear();
   int target_fd = -1;
   auto s = Util::SockConnect(dst_ip, dst_port, &target_fd);
@@ -105,7 +111,7 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
     s = Util::SockSend(target_fd, cmd);
   }
 
-  LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, slot: " << slot;
+  LOG(INFO) << "[Agent] Succeed to migrate slot snapshot, slot: " << slot;
 }
 
 Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& meta_value, SST_content* result_bucket,
@@ -201,10 +207,12 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
   } else {
     // pick only the content array that is filled
     if (result_bucket->meta_size > min_aggregation_size) {
+      LOG(INFO) << "meta column full, generate SST";
       db_ptr->CreateTableBuilder(meta_cf->GetID(), meta_cf, -1, result_bucket->meta_content, meta_sst);
       sst_map->meta_ssts.push_back(meta_sst);
     }
     if (result_bucket->subkeydata_size > min_aggregation_size) {
+      LOG(INFO) << "subkey column full, generate SST";
       db_ptr->CreateTableBuilder(meta_cf->GetID(), subkey_cf, -1, result_bucket->meta_content, subkey_sst);
       sst_map->subkey_ssts.push_back(subkey_sst);
     }

@@ -4903,7 +4903,6 @@ class CommandIngestion : public Commander {
       if (!s.ok()) {
         return {Status::NotOK, "Can not create dir"};
       }
-<<<<<<< HEAD
       std::string sst_no_file = target_file_uri.substr(target_file_uri.size()-9,9);
       LOG(INFO) <<"target file name:" << sst_no_file;
 
@@ -4914,13 +4913,6 @@ class CommandIngestion : public Commander {
 
       target_file_uri_list.push_back(temp_file_name);
       auto s_ = svr->storage_->IngestFile(column_family,target_file_uri_list);
-=======
-      std::string temp_file_name = std::to_string(env->NowMicros());
-      FILE *temp_file = fopen(temp_file_name.c_str(), "w");
-      fwrite(this->data_pack.data(), 1, data_pack.size(), temp_file);
-      fclose(temp_file);
-      auto s_ = svr->storage_->IngestFile(column_family, target_file_uri_list);
->>>>>>> refs/remotes/origin/unstable
       if (!s_.IsOK()) {
         //    return {Status::NotOK,"Can not ingest"};
         return s_;
@@ -6194,12 +6186,8 @@ const CommandAttributes redisCommandTable[]{
 
     MakeCmdAttr<CommandCluster>("cluster", -2, "cluster no-script", 0, 0, 0),
     MakeCmdAttr<CommandClusterX>("clusterx", -2, "cluster no-script", 0, 0, 0),
-<<<<<<< HEAD
     MakeCmdAttr<CommandIngestion>("ingest", -4, "command to ingest files", 0, 0, 0),
-=======
-    MakeCmdAttr<CommandIngestion>("ingest", -3, "command to ingest files", 0, 0, 0),
     MakeCmdAttr<PingMigrationAgent>("ping_agent", -1, "read-only", 0, 0, 0),
->>>>>>> refs/remotes/origin/unstable
 
     MakeCmdAttr<CommandEval>("eval", -3, "exclusive write no-script", 0, 0, 0),
     MakeCmdAttr<CommandEvalSHA>("evalsha", -3, "exclusive write no-script", 0, 0, 0),

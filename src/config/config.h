@@ -141,7 +141,8 @@ struct Config {
   int migration_threshold_file_num = 5;
   std::string ingest_data_path = "/tmp/kvrocks";
   std::string migration_agent_ip = "127.0.0.1";
-  int migration_agent_port = 12340;
+  int migration_agent_port = port + 10000;
+  bool agent_migration = false;
 
   int migrate_speed;
   int pipeline_size;
