@@ -6,7 +6,7 @@
 
 namespace Engine {
 MigrationAgent::MigrationAgent(Config* config, Storage* storage)
-    : Redis::Database(storage, rocksdb::kDefaultColumnFamilyName) {
+    : Redis::Database(storage, rocksdb::kDefaultColumnFamilyName), slots_(0), dst_host_(""), dst_port_(0) {
   port_ = config->migration_agent_port;
   ip_ = config->migration_agent_ip;
 
@@ -18,27 +18,42 @@ MigrationAgent::MigrationAgent(Config* config, Storage* storage)
   auto s = rocksdb::DB::OpenForReadOnly(rocksdb::Options(), storage->GetDB()->GetName(), &db_ptr);
   assert(s.ok());
 }
-Status MigrationAgent::publish_agent_command(std::string dst_ip, int dst_port, int migrate_slot, std::string namespace_,
-                                             const rocksdb::Snapshot* slot_snapshot_) {
+
+inline void JoinThreads(std::vector<std::thread*>& thread_pool) {
+  for (std::thread* thread : thread_pool) {
+    thread->join();
+  }
+  return;
+}
+
+Status MigrationAgent::ExecuteMigrationInBackground(std::string dst_ip, int dst_port, std::vector<int>& slots) {
+  std::thread* thread = nullptr;
+  thread = new std::thread(&MigrationAgent::publish_agent_command_multi, this);
+  thread->detach();
+  return Status::OK();
+}
+Status MigrationAgent::publish_agent_command_multi() {
+  auto thread_pool_depth = config_->max_migration_compaction;
+  std::vector<std::thread*> thread_pool;
+  int count = 0;
+  for (auto slot : slots_) {
+    thread_pool.emplace_back();
+    create_thread(&thread_pool[count], slot);
+    if (count == thread_pool_depth) {
+      JoinThreads(thread_pool);
+      thread_pool.clear();
+      count = 0;
+    }
+    count++;
+  }
+  JoinThreads(thread_pool);
+  return Status::OK();
+}
+
+Status MigrationAgent::publish_agent_command(std::string dst_ip, int dst_port, int migrate_slot) {
   // add the migration controller if needed
   std::thread* migration_worker = nullptr;
-
-  switch (config_->batch_migrate) {
-    case 0:
-      migration_worker = new std::thread(&MigrationAgent::call_to_iterate_agent, this, migrate_slot, namespace_,
-                                         slot_snapshot_, dst_ip, dst_port);
-      break;
-    case 1:
-      migration_worker = new std::thread(&MigrationAgent::call_to_batch_agent, this);
-      break;
-    case 2:
-      migration_worker = new std::thread(&MigrationAgent::call_to_level_agent, this);
-      break;
-    default:
-      migration_worker = new std::thread(&MigrationAgent::call_to_level_agent, this);
-      break;
-  }
-
+  create_thread(&migration_worker, migrate_slot);
   migration_worker->detach();
 
   return Status::OK();
@@ -92,7 +107,7 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
 
   auto end = Util::GetTimeStampMS();
 
-  LOG(INFO) << "[Agent] Iterate and SST dump finished, time (ms): " << end-start;
+  LOG(INFO) << "[Agent] Iterate and SST dump finished, time (ms): " << end - start;
 
   temp_result.clear();
   int target_fd = -1;
@@ -224,4 +239,21 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
 
 void MigrationAgent::call_to_level_agent() { std::cout << "Not supported yep" << std::endl; }
 void MigrationAgent::call_to_batch_agent() { std::cout << "Not supported yep" << std::endl; }
+void MigrationAgent::create_thread(std::thread** migration_worker, int migrate_slot) {
+  switch (config_->batch_migrate) {
+    case 0:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_iterate_agent, this, migrate_slot, namespace_,
+                                          this->storage_->GetDB()->GetSnapshot(), dst_host_, dst_port_);
+      return;
+    case 1:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_batch_agent, this);
+      return;
+    case 2:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_level_agent, this);
+      return;
+    default:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_level_agent, this);
+      return;
+  }
+}
 }  // namespace Engine

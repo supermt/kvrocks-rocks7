@@ -71,6 +71,8 @@ struct CLIOptions {
 };
 
 struct Config {
+  int max_migration_compaction = 10;
+
  public:
   Config();
   ~Config() = default;

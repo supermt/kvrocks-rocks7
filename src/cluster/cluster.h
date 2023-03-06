@@ -80,6 +80,7 @@ class Cluster {
   Status GetClusterNodes(std::string *nodes_str);
   Status SetNodeId(const std::string &node_id);
   Status SetSlot(int slot, const std::string &node_id, int64_t version);
+  Status SetSlot(std::vector<int> &slots, const std::string &node_id, int64_t version);
   Status SetSlotMigrated(int slot, const std::string &ip_port);
   Status SetSlotImported(int slot);
   Status GetSlotsInfo(std::vector<SlotInfo> *slot_infos);
@@ -92,6 +93,7 @@ class Cluster {
                          Redis::Connection *conn);
   void SetMasterSlaveRepl();
   Status MigrateSlot(int slot, const std::string &dst_node_id);
+  Status MigrateSlot(std::vector<int> &slots, const std::string &dst_node_id);
   Status ImportSlot(Redis::Connection *conn, int slot, int state);
   std::string GetMyId() const { return myid_; }
 

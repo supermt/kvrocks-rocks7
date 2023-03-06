@@ -679,3 +679,79 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
     return Status(Status::RedisExecErr, "MOVED " + std::to_string(slot) + " " + ip_port);
   }
 }
+
+Status Cluster::SetSlot(std::vector<int> &slots, const std::string &node_id, int64_t new_version) {
+  if (new_version <= 0 || new_version != version_ + 1) {
+    return Status(Status::NotOK, errInvalidClusterVersion);
+  }
+  if (node_id.size() != kClusterNodeIdLen) {
+    return Status(Status::NotOK, errInvalidNodeID);
+  }
+
+  // Get the node which we want to assign a slot into it
+  std::shared_ptr<ClusterNode> to_assign_node = nodes_[node_id];
+  if (to_assign_node == nullptr) {
+    return Status(Status::NotOK, "No this node in the cluster");
+  }
+  if (to_assign_node->role_ != kClusterMaster) {
+    return Status(Status::NotOK, errNoMasterNode);
+  }
+
+  // Update version
+  version_ = new_version;
+
+  for (int slot : slots) {
+    if (!IsValidSlot(slot)) {
+      return Status(Status::NotOK, errInvalidSlotID);
+    }
+    std::shared_ptr<ClusterNode> old_node = slots_nodes_[slot];
+    if (old_node != nullptr) {
+      old_node->slots_[slot] = false;
+    }
+    to_assign_node->slots_[slot] = true;
+    slots_nodes_[slot] = to_assign_node;
+
+    // Clear data of migrated slot or record of imported slot
+    if (old_node == myself_ && old_node != to_assign_node) {
+      // If slot is migrated from this node
+      if (migrated_slots_.count(slot)) {
+        svr_->slot_migrate_->ClearKeysOfSlot(kDefaultNamespace, slot);
+        migrated_slots_.erase(slot);
+      }
+      // If slot is imported into this node
+      if (imported_slots_.count(slot)) {
+        imported_slots_.erase(slot);
+      }
+    }
+  }
+
+  return Status::OK();
+}
+Status Cluster::MigrateSlot(std::vector<int> &slots, const std::string &dst_node_id) {
+  if (nodes_.find(dst_node_id) == nodes_.end()) {
+    return Status(Status::NotOK, "Can't find the destination node id");
+  }
+  // check the parameters
+  for (auto slot : slots) {
+    if (!IsValidSlot(slot)) {
+      return Status(Status::NotOK, errSlotOutOfRange);
+    }
+    if (slots_nodes_[slot] != myself_) {
+      return Status(Status::NotOK, "Can't migrate slot which doesn't belong to me");
+    }
+  }
+
+  if (IsNotMaster()) {
+    return Status(Status::NotOK, "Slave can't migrate slot");
+  }
+  if (nodes_[dst_node_id]->role_ != kClusterMaster) {
+    return Status(Status::NotOK, "Can't migrate slot to a slave");
+  }
+  if (nodes_[dst_node_id] == myself_) {
+    return Status(Status::NotOK, "Can't migrate slot to myself");
+  }
+
+  const auto dst = nodes_[dst_node_id];
+  Status s = svr_->mg_agent->ExecuteMigrationInBackground(dst->host_, dst->port_, slots);
+  return s;
+}

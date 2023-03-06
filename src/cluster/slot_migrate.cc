@@ -1007,7 +1007,7 @@ Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
   env_->GetHostNameString(&host_name_string);
 
   std::string ingestion_command_head = "ingest ";
- 
+
   std::string ingestion_command = "";
 
   ingestion_command_head.append(Engine::kMetadataColumnFamilyName);
@@ -1019,28 +1019,29 @@ Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
     // send uri to target system.
     // assume the hdfs_env will generate the uri for it first.
     //
-    file_name = file_name.substr(file_name.size()-9,9);
+    file_name = file_name.substr(file_name.size() - 9, 9);
     LOG(INFO) << "remote copying file : " << file_name;
-    std::string scp_command  = "scp ";
-    scp_command+=file_name;
-    scp_command+=" jinghua2@";
-    scp_command+=slot_job_->dst_ip_;
-    scp_command+=":/data/jinghua2/tmp/";
+    std::string scp_command = "scp ";
+    scp_command += file_name;
+    scp_command += " jinghua2@";
+    scp_command += slot_job_->dst_ip_;
+    scp_command += ":/data/jinghua2/tmp/";
     system(scp_command.c_str());
     ingestion_command = ingestion_command_head + file_name;
     auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
 
-//    auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
-//    if (!cmd_status.IsOK()) {
-//      // this command can not be completed in pipeline or async
-//      LOG(ERROR) << "Migration error, the system is broken while ingestion.";
-//      return cmd_status;
-//    }
+    //    auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
+    //    if (!cmd_status.IsOK()) {
+    //      // this command can not be completed in pipeline or async
+    //      LOG(ERROR) << "Migration error, the system is broken while ingestion.";
+    //      return cmd_status;
+    //    }
   }
   // Migrate start
   end_ms = env->NowMicros();
 
-  LOG(INFO) << "Remote Sending meta data, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+  LOG(INFO) << "Remote Sending meta data, contains " << meta_ssts.size()
+            << " SST(s), time(ms) take: " << end_ms - start_ms;
 
   ingestion_command_head = "ingest ";
   ingestion_command_head.append(Engine::kSubkeyColumnFamilyName);
@@ -1050,23 +1051,22 @@ Status SlotMigrate::SendSnapShotByBatch(const rocksdb::CompactRangeOptions &cro,
 
   start_ms = env->NowMicros();
   for (auto file_name : data_ssts) {
-    file_name = file_name.substr(file_name.size()-9,9);
+    file_name = file_name.substr(file_name.size() - 9, 9);
     LOG(INFO) << "remote copying file : " << file_name;
-    std::string scp_command  = "scp ";
-    scp_command+=file_name;
-    scp_command+=" jinghua2@";
-    scp_command+=slot_job_->dst_ip_;
-    scp_command+=":/data/jinghua2/tmp/";
+    std::string scp_command = "scp ";
+    scp_command += file_name;
+    scp_command += " jinghua2@";
+    scp_command += slot_job_->dst_ip_;
+    scp_command += ":/data/jinghua2/tmp/";
     system(scp_command.c_str());
     ingestion_command = ingestion_command_head + file_name;
 
     auto cmd_status = Util::SockSend(slot_job_->slot_fd_, ingestion_command);
-
-
   }
 
   end_ms = env->NowMicros();
-  LOG(INFO) << "Remote Sending data pack, contains " << meta_ssts.size() << " SST(s), time(ms) take: " << end_ms - start_ms;
+  LOG(INFO) << "Remote Sending data pack, contains " << meta_ssts.size()
+            << " SST(s), time(ms) take: " << end_ms - start_ms;
 
   LOG(INFO) << "[migrate] Succeed to migrate slot snapshot, total SSTables";
 
@@ -1140,9 +1140,9 @@ Status SlotMigrate::SendSnapshot() {
   LOG(INFO) << "[migrate] Start sending snapshot, migration method: " << migration_methods[migration_method]
             << ", migrating slot: " << migrate_slot_;
 
-  if (svr_->GetConfig()->agent_migration){
-	  LOG(INFO) << "Send to agent";
-      return SendSnapshotLevel();
+  if (svr_->GetConfig()->agent_migration) {
+    LOG(INFO) << "Send to agent";
+    return SendSnapshotLevel();
   }
 
   switch (svr_->GetConfig()->batch_migrate) {
@@ -1219,11 +1219,11 @@ Status SlotMigrate::SendSnapshotAuto() {
 }
 
 Status SlotMigrate::SendSnapshotLevel() {
-//  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
+  //  auto s = Util::SockConnect(svr_config->migration_agent_ip, svr_config->migration_agent_port, &agent_fd);
   //  if (!s.IsOK()) {
   //    LOG(ERROR) << "[Migration] Failed to connect migration agent" << s.Msg();
   //  }
 
-  svr_->mg_agent.get()->publish_agent_command(dst_ip_, dst_port_, migrate_slot_, namespace_, slot_snapshot_);
+//  svr_->mg_agent.get()->publish_agent_command(dst_ip_, dst_port_, migrate_slot_, namespace_, slot_snapshot_);
   return Status::OK();
 }

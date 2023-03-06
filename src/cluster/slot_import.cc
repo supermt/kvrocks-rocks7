@@ -69,6 +69,7 @@ bool SlotImport::Success(int slot) {
 
   import_status_ = kImportSuccess;
   import_fd_ = -1;
+  LOG(INFO) << "[import] Ipmort Success, " ;
   return true;
 }
 

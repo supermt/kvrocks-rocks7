@@ -4872,18 +4872,18 @@ class PingMigrationAgent : public Commander {
 class CommandIngestion : public Commander {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-//    if (args.size() != 3) {
-//      return Status(Status::RedisParseErr,"Too few arguments, usage: ingestion <column family name>  true/false file/data_pack");
-//    }
+    //    if (args.size() != 3) {
+    //      return Status(Status::RedisParseErr,"Too few arguments, usage: ingestion <column family name>  true/false
+    //      file/data_pack");
+    //    }
     column_family = args_[1];
     std::istringstream(args_[2]) >> is_file_uri;
     target_file_uri = args_[3];
-    if (is_file_uri){
-        LOG(INFO) << "ingesting file: " << is_file_uri << std::endl;
-    }else {
-    	data_pack = args_[4];
-        LOG(INFO) << "ingesting data_pack: " << data_pack.size() << std::endl;
-    
+    if (is_file_uri) {
+      LOG(INFO) << "ingesting file: " << is_file_uri << std::endl;
+    } else {
+      data_pack = args_[4];
+      LOG(INFO) << "ingesting data_pack: " << data_pack.size() << std::endl;
     }
     return Status::OK();
   }
@@ -4891,7 +4891,7 @@ class CommandIngestion : public Commander {
   Status Execute(Server *svr, Connection *conn, std::string *output) override {
     std::vector<std::string> target_file_uri_list;
     if (is_file_uri) {
-      target_file_uri_list.push_back("/home/jinghuan/tmp/"+target_file_uri);
+      target_file_uri_list.push_back("/home/jinghuan/tmp/" + target_file_uri);
       auto s = svr->storage_->IngestFile(column_family, target_file_uri_list);
       // this command does not need the connection;
       if (!s.IsOK()) return s;
@@ -4903,16 +4903,16 @@ class CommandIngestion : public Commander {
       if (!s.ok()) {
         return {Status::NotOK, "Can not create dir"};
       }
-      std::string sst_no_file = target_file_uri.substr(target_file_uri.size()-9,9);
-      LOG(INFO) <<"target file name:" << sst_no_file;
+      std::string sst_no_file = target_file_uri.substr(target_file_uri.size() - 9, 9);
+      LOG(INFO) << "target file name:" << sst_no_file;
 
       std::string temp_file_name = ingest_file_dir + "/" + sst_no_file;
-      FILE* temp_file = fopen(temp_file_name.c_str(),"a");
-      fwrite(this->data_pack.data(),1,data_pack.size(),temp_file);
+      FILE *temp_file = fopen(temp_file_name.c_str(), "a");
+      fwrite(this->data_pack.data(), 1, data_pack.size(), temp_file);
       fclose(temp_file);
 
       target_file_uri_list.push_back(temp_file_name);
-      auto s_ = svr->storage_->IngestFile(column_family,target_file_uri_list);
+      auto s_ = svr->storage_->IngestFile(column_family, target_file_uri_list);
       if (!s_.IsOK()) {
         //    return {Status::NotOK,"Can not ingest"};
         return s_;
@@ -4936,11 +4936,20 @@ class CommandClusterX : public Commander {
     if (args.size() == 2 && (subcommand_ == "version")) return Status::OK();
     if (subcommand_ == "setnodeid" && args_.size() == 3 && args_[2].size() == kClusterNodeIdLen) return Status::OK();
     if (subcommand_ == "migrate") {
-      if (args.size() != 4) return Status(Status::RedisParseErr, errWrongNumOfArguments);
-      auto s = Util::DecimalStringToNum(args[2], &slot_);
-      if (!s.IsOK()) return s;
-      dst_node_id_ = args[3];
-      return Status::OK();
+      if (args.size() == 4) {
+        auto s = Util::DecimalStringToNum(args[2], &slot_id_);
+        if (!s.IsOK()) return s;
+        dst_node_id_ = args[3];
+        return Status::OK();
+      } else if (args.size() == 5) {
+        auto s = Util::DecimalStringToNum(args[2], &start_slot);
+        if (!s.IsOK()) return s;
+        s = Util::DecimalStringToNum(args[3], &end_slot);
+        dst_node_id_ = args[4];
+        return Status::OK();
+      } else {
+        return Status(Status::RedisParseErr, errWrongNumOfArguments);
+      }
     }
     if (subcommand_ == "setnodes" && args_.size() >= 4) {
       nodes_str_ = args_[2];
@@ -4981,6 +4990,35 @@ class CommandClusterX : public Commander {
       if (set_version_ < 0) return Status(Status::RedisParseErr, "Invalid version");
       return Status::OK();
     }
+    // CLUSTERX SETSLOT $SLOT_ID_START $SLOT_ID_END NODE $NODE_ID $VERSION
+    if (subcommand_ == "setslot" && args_.size() == 7) {
+      slot_id_ = -1;
+      auto parse_start = ParseInt<int>(args[2].c_str(), 10);
+      auto parse_end = ParseInt<int>(args[3].c_str(), 10);
+      if (!parse_start || !parse_end) {
+        return Status(Status::RedisParseErr, errValueNotInteger);
+      }
+
+      start_slot = *parse_start;
+      end_slot = *parse_end;
+      if (!Cluster::IsValidSlot(start_slot) || !Cluster::IsValidSlot(end_slot)) {
+        return Status(Status::RedisParseErr, "Invalid slot id");
+      }
+      if (strcasecmp(args_[4].c_str(), "node") != 0) {
+        return Status(Status::RedisParseErr, "Invalid setslot options");
+      }
+      if (args_[5].size() != kClusterNodeIdLen) {
+        return Status(Status::RedisParseErr, "Invalid node id");
+      }
+      auto parse_version = ParseInt<uint64_t>(args[6].c_str(), 10);
+      if (!parse_version) {
+        return Status(Status::RedisParseErr, errValueNotInteger);
+      }
+      set_version_ = *parse_version;
+      if (set_version_ < 0) return Status(Status::RedisParseErr, "Invalid version");
+      return Status::OK();
+    }
+
     return Status(Status::RedisParseErr, "CLUSTERX command, CLUSTERX VERSION|SETNODEID|SETNODES|SETSLOT|MIGRATE");
   }
 
@@ -5010,7 +5048,17 @@ class CommandClusterX : public Commander {
         *output = Redis::Error(s.Msg());
       }
     } else if (subcommand_ == "setslot") {
-      Status s = svr->cluster_->SetSlot(slot_id_, args_[4], set_version_);
+      Status s;
+      if (slot_id_ == -1) {
+        s = svr->cluster_->SetSlot(slot_id_, args_[4], set_version_);
+      } else {
+        std::vector<int> slots;
+        for (int a = start_slot; a < end_slot; a++) {
+          slots.push_back(a);
+        }
+        s = svr->cluster_->SetSlot(slots, args_[5], set_version_);
+      }
+
       if (s.IsOK()) {
         *output = Redis::SimpleString("OK");
       } else {
@@ -5020,7 +5068,17 @@ class CommandClusterX : public Commander {
       int64_t v = svr->cluster_->GetVersion();
       *output = Redis::BulkString(std::to_string(v));
     } else if (subcommand_ == "migrate") {
-      Status s = svr->cluster_->MigrateSlot(static_cast<int>(slot_), dst_node_id_);
+      Status s;
+      if (slot_id_ == -1) {
+        std::vector<int> slots;
+        for (int slot = start_slot; slot < end_slot; slot++) {
+          slots.push_back(slot);
+        }
+        s = svr->cluster_->MigrateSlot(slots, dst_node_id_);
+      } else {
+        s = svr->cluster_->MigrateSlot(static_cast<int>(slot_id_), dst_node_id_);
+      }
+
       if (s.IsOK()) {
         *output = Redis::SimpleString("OK");
       } else {
@@ -5036,10 +5094,13 @@ class CommandClusterX : public Commander {
   std::string subcommand_;
   std::string nodes_str_;
   uint64_t set_version_ = 0;
-  int slot_id_ = -1;
+  int64_t slot_id_ = -1;
+  int64_t start_slot = -1;
+  int64_t end_slot = -1;
+
   bool force_ = false;
   std::string dst_node_id_;
-  int64_t slot_ = -1;
+  //  int64_t slot_ = -1;
 };
 
 class CommandEval : public Commander {

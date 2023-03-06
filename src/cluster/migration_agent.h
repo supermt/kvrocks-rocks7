@@ -22,8 +22,9 @@ class MigrationAgent : public Redis::Database {
   explicit MigrationAgent(Config* config, Storage* storage);
   //  ~MigrationAgent() { std::cout << "stop agent" << std::endl; }
 
-  Status publish_agent_command(std::string dst_ip, int dst_port, int migrate_slot, std::string namespace_,
-                               const rocksdb::Snapshot* slot_snapshot_);
+  Status ExecuteMigrationInBackground(std::string dst_ip, int dst_port, std::vector<int>& slots);
+  Status publish_agent_command_multi();
+  Status publish_agent_command(std::string dst_ip, int dst_port, int migrate_slot);
 
   struct SST_content {
     std::vector<std::pair<Slice, Slice>> meta_content;
@@ -41,6 +42,8 @@ class MigrationAgent : public Redis::Database {
     std::vector<std::string> subkey_ssts;
     Ingestion_candidate() : meta_ssts(0), subkey_ssts(0) {}
   };
+
+ private:
   //  typedef std::unordered_map<std::string, std::vector<std::pair<Slice, Slice>>*> SST_content;
   //  typedef std::unordered_map<std::string, std::vector<std::string>> Ingestion_candidate;
   void call_to_iterate_agent(int migrate_slot, std::string namespace_, const rocksdb::Snapshot* slot_snapshot_,
@@ -51,17 +54,22 @@ class MigrationAgent : public Redis::Database {
   bool ExtractComplexRecord(const rocksdb::Slice& key, const Metadata& metadata, SST_content* result_bucket,
                             const rocksdb::Snapshot* migration_snapshot);
   Status DumpContentToSST(SST_content* result_bucket, Ingestion_candidate* sst_map, bool force);
+  void create_thread(std::thread** migration_worker, int migration_slot);
+
   void call_to_level_agent();
   void call_to_batch_agent();
 
- private:
-  const uint64_t min_aggregation_size = 64 * 1024*  1024l;
+  const uint64_t min_aggregation_size = 64 * 1024l;
   Config* config_;
   Storage* storage_;
   rocksdb::DB* db_ptr;
   int port_;
   std::string ip_;
   rocksdb::Env* env_;
+
+  std::vector<int> slots_;
+  std::string dst_host_;
+  int dst_port_;
 };
 
 }  // namespace Engine
