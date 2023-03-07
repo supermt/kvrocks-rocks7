@@ -106,7 +106,7 @@ void MigrationAgent::call_to_seek_and_dump_agent(int migrate_slot, std::string n
     std::string ns, user_key;
     ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
     // extract tables for ingestion.
-    ExtractOneRecord(user_key, iter->value(), &temp_result, slot_snapshot_);
+    ExtractOneRecord(user_key, iter->value(), &temp_result, slot_snapshot_, true);
     DumpContentToSST(&temp_result, &migration_ssts, false);
   }
 
@@ -141,8 +141,115 @@ void MigrationAgent::call_to_seek_and_dump_agent(int migrate_slot, std::string n
   Finish(migrate_slot, sock_fd_);
 }
 
+void MigrationAgent::call_to_seek_and_insert_agent(int slot) {
+  auto slot_snapshot_ = this->storage_->GetDB()->GetSnapshot();
+  rocksdb::ReadOptions read_options;
+  read_options.snapshot = slot_snapshot_;
+  read_options.fill_cache = false;
+  rocksdb::ColumnFamilyHandle* cf_handle = storage_->GetCFHandle(Engine::kMetadataColumnFamilyName);
+  std::unique_ptr<rocksdb::Iterator> iter(storage_->GetDB()->NewIterator(read_options, cf_handle));
+  bool stop_migrate_ = false;
+  std::string prefix;
+  ComposeSlotKeyPrefix(namespace_, slot, &prefix);
+  LOG(INFO) << "[Agent] Iterate keys of slot, key's prefix: " << prefix;
+  LOG(INFO) << "[Agent] Start migrating snapshot of slot " << slot;
+  iter->Seek(prefix);
+
+  Slice current_migrate_key;
+
+  SST_content temp_result;
+  Ingestion_candidate migration_ssts;
+  auto start = Util::GetTimeStampMS();
+  // Seek to the beginning of keys start with 'prefix' and iterate all these keys
+  for (iter->Seek(prefix); iter->Valid(); iter->Next()) {
+    // The migrating task has to be stopped, if server role is changed from master to slave
+    // or flush command (flushdb or flushall) is executed
+    if (stop_migrate_) {
+      LOG(ERROR) << "[agent] Stop migrating snapshot due to the thread stopped";
+      return;
+    }
+
+    // Iteration is out of range
+    if (!iter->key().starts_with(prefix)) {
+      break;
+    }
+
+    // Get user key
+    std::string ns, user_key;
+    ExtractNamespaceKey(iter->key(), &ns, &user_key, true);
+    // extract tables for ingestion.
+    ExtractOneRecord(user_key, iter->value(), &temp_result, slot_snapshot_, false);
+    SendCmdsPipeline(&temp_result, false);
+  }
+  SendCmdsPipeline(&temp_result, true);
+  auto end = Util::GetTimeStampMS();
+
+  LOG(INFO) << "[Agent] Iterate and SST dump finished, time (ms): " << end - start;
+
+  temp_result.clear();
+  LOG(INFO) << "[Agent] Succeed to migrate slot snapshot, slot: " << slot;
+  Finish(slot, sock_fd_);
+
+  std::cout << "Not supported yep" << std::endl;
+}
+Status MigrationAgent::SendRawKV(const std::vector<std::pair<Slice, Slice>>& kv_list, std::string cf_name) {
+  uint64_t i = 0;
+  uint64_t command_num = 0;
+  std::string commands;
+  while (i < kv_list.size()) {
+    command_num++;
+    i++;
+    std::vector<std::string> command = {"rawkvset", cf_name, kv_list[i].first.ToString(), kv_list[i].second.ToString()};
+
+    commands += Redis::MultiBulkString(command, false);
+    if (command_num > kPipelineSize) {
+      auto s = Util::SockSend(sock_fd_, commands);
+      if (!s.IsOK()) {
+        LOG(ERROR) << "[agent] Send raw kv failed" << s.Msg();
+        return s;
+      }
+      bool st = CheckResponseWithCounts(sock_fd_, command_num);
+      if (!st) {
+        LOG(ERROR) << "[agent] Error occurs when sending rawkv";
+        return Status::NotOK;
+      }
+      commands.clear();
+      command_num = 0;
+    }
+  }
+
+  return Status::OK();
+}
+bool MigrationAgent::SendCmdsPipeline(SST_content* temp, bool force) {
+  // Check pipeline
+  if (force == false && (temp->meta_content.size() + temp->subkey_content.size() <= kPipelineSize)) {
+    return true;
+  }
+
+  // Do not limit migrate speed, we are going to validate it later
+  //  MigrateSpeedLimit();
+
+  // Send pipeline
+
+  std::string commands;
+
+  auto s = SendRawKV(temp->meta_content, kMetadataColumnFamilyName);
+  if (!s.IsOK()) {
+    return false;
+  }
+  temp->meta_content.clear();
+  // TODO: find out some way to update this 10, which is the column number
+  s = SendRawKV(temp->subkey_content, kSubkeyColumnFamilyName);
+  if (!s.IsOK()) {
+    return false;
+  }
+  temp->subkey_content.clear();
+
+  return s.IsOK();
+}
+
 Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& meta_value, SST_content* result_bucket,
-                                        const rocksdb::Snapshot* snapshot) {
+                                        const rocksdb::Snapshot* snapshot, bool complex_with_meta) {
   std::string prefix_key;
   AppendNamespacePrefix(key, &prefix_key);
   std::string bytes = meta_value.ToString();
@@ -158,7 +265,7 @@ Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& 
 
   switch (metadata.Type()) {
     case kRedisString: {
-      bool s = ExtractSimpleRecord(key, meta_value, result_bucket);
+      bool s = ExtractMetaRecord(key, meta_value, result_bucket);
       if (!s) {
         return Status::NotOK;
       }
@@ -170,11 +277,17 @@ Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& 
     case kRedisHash:
     case kRedisSet:
     case kRedisSortedint: {
-      bool s = ExtractComplexRecord(key, metadata, result_bucket, snapshot);
+      if (complex_with_meta) {
+        bool s = ExtractMetaRecord(key, meta_value, result_bucket);
+        if (!s) {
+          return Status::NotOK;
+        }
+      }
+
+      bool s = ExtractSubkeyRecord(key, metadata, result_bucket, snapshot);
       if (!s) {
         return Status::NotOK;
       }
-
       break;
     }
     default:
@@ -183,15 +296,15 @@ Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& 
 
   return Status::OK();
 }
-bool MigrationAgent::ExtractSimpleRecord(const rocksdb::Slice& key, const Slice& value, SST_content* result_bucket) {
+bool MigrationAgent::ExtractMetaRecord(const rocksdb::Slice& key, const Slice& value, SST_content* result_bucket) {
   auto list = result_bucket->meta_content;
   result_bucket->meta_size += (key.size() + value.size());
   list.emplace_back(key, value);
   return true;
 }
 
-bool MigrationAgent::ExtractComplexRecord(const rocksdb::Slice& key, const Metadata& metadata,
-                                          SST_content* result_bucket, const rocksdb::Snapshot* migration_snapshot) {
+bool MigrationAgent::ExtractSubkeyRecord(const rocksdb::Slice& key, const Metadata& metadata,
+                                         SST_content* result_bucket, const rocksdb::Snapshot* migration_snapshot) {
   rocksdb::ReadOptions read_opt;
   read_opt.snapshot = migration_snapshot;
   read_opt.fill_cache = false;  // we can make some changes here
@@ -252,14 +365,14 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
 
 void MigrationAgent::call_to_level_agent() { std::cout << "Not supported yep" << std::endl; }
 void MigrationAgent::call_to_batch_agent() { std::cout << "Not supported yep" << std::endl; }
-void MigrationAgent::call_to_seek_and_insert_agent() { std::cout << "Not supported yep" << std::endl; }
+
 void MigrationAgent::call_to_fusion_agent() { std::cout << "Not supported yep" << std::endl; }
 
 void MigrationAgent::create_thread(std::thread** migration_worker, int migrate_slot) {
   auto mode = MigrationMode(config_->batch_migrate);
   switch (mode) {
     case kSeekAndInsert:
-      *migration_worker = new std::thread(&MigrationAgent::call_to_seek_and_insert_agent, this);
+      *migration_worker = new std::thread(&MigrationAgent::call_to_seek_and_insert_agent, this, migrate_slot);
       return;
     case kSeekAndDump:
       *migration_worker = new std::thread(&MigrationAgent::call_to_seek_and_dump_agent, this, migrate_slot, namespace_,

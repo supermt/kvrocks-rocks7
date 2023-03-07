@@ -27,10 +27,7 @@
 #include "event_util.h"
 #include "storage/batch_extractor.h"
 
-static std::map<RedisType, std::string> type_to_cmd = {
-    {kRedisString, "set"}, {kRedisList, "rpush"},    {kRedisHash, "hmset"},      {kRedisSet, "sadd"},
-    {kRedisZSet, "zadd"},  {kRedisBitmap, "setbit"}, {kRedisSortedint, "siadd"},
-};
+
 
 SlotMigrate::SlotMigrate(Server *svr, int speed, int pipeline_size, int seq_gap)
     : Database(svr->storage_, kDefaultNamespace),

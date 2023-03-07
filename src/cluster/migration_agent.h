@@ -49,21 +49,22 @@ class MigrationAgent : public Redis::Database {
   void call_to_seek_and_dump_agent(int migrate_slot, std::string namespace_, const rocksdb::Snapshot* slot_snapshot_,
                                    std::string dst_ip, int dst_port);
   Status ExtractOneRecord(const rocksdb::Slice& key, const Slice& metadata, SST_content* result_bucket,
-                          const rocksdb::Snapshot* slot_snapshot_);
-  bool ExtractSimpleRecord(const rocksdb::Slice& key, const Slice& metadata, SST_content* result_bucket);
-  bool ExtractComplexRecord(const rocksdb::Slice& key, const Metadata& metadata, SST_content* result_bucket,
-                            const rocksdb::Snapshot* migration_snapshot);
+                          const rocksdb::Snapshot* slot_snapshot_, bool complex_with_meta);
+  bool ExtractMetaRecord(const rocksdb::Slice& key, const Slice& value, SST_content* result_bucket);
+  bool ExtractSubkeyRecord(const rocksdb::Slice& key, const Metadata& metadata, SST_content* result_bucket,
+                           const rocksdb::Snapshot* migration_snapshot);
   Status DumpContentToSST(SST_content* result_bucket, Ingestion_candidate* sst_map, bool force);
   void create_thread(std::thread** migration_worker, int migration_slot);
 
-  void call_to_seek_and_insert_agent();
+  void call_to_seek_and_insert_agent(int migrate_slot);
   void call_to_level_agent();
   void call_to_batch_agent();
   void call_to_fusion_agent();
 
   bool SetDstImportStatus(int sock_fd, int status, int migration_slot);
   Status Finish(int migration_slot, int sock_fd);
-  const uint64_t min_aggregation_size = 64 * 1024 * 1024l;
+  const static uint64_t min_aggregation_size = 64 * 1024 * 1024l;
+  const static uint64_t kPipelineSize = 16l;
   Config* config_;
   Storage* storage_;
   Server* svr_;
@@ -79,6 +80,8 @@ class MigrationAgent : public Redis::Database {
   int dst_port_;
   void Fail(int slot, int fd);
   bool CheckResponseWithCounts(int sock_fd, int total);
+  Status SendRawKV(const std::vector<std::pair<Slice, Slice>>& kv_list, std::string cf_name);
+  bool SendCmdsPipeline(SST_content* temp, bool force);
 };
 
 }  // namespace Engine

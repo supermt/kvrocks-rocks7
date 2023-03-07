@@ -549,6 +549,22 @@ class CommandAppend : public Commander {
   }
 };
 
+class CommandRawKVSet : public Commander {
+ public:
+  // rawkvset cf_name key value
+  Status Execute(Server *svr, Connection *conn, std::string *output) override {
+    std::string cf_name = args_[1];
+    auto key = rocksdb::Slice(args_[2]);
+    auto value = rocksdb::Slice(args_[3]);
+    auto cfh = svr->storage_->GetCFHandle(cf_name);
+    svr->storage_->GetDB()->Put(w_opt_, cfh, key, value);
+    return Status::OK();
+  }
+
+ private:
+  rocksdb::WriteOptions w_opt_;
+};
+
 class CommandSet : public Commander {
  public:
   Status Parse(const std::vector<std::string> &args) override {
@@ -6120,6 +6136,9 @@ const CommandAttributes redisCommandTable[]{
     MakeCmdAttr<CommandMGet>("mget", -2, "read-only", 1, -1, 1),
     MakeCmdAttr<CommandAppend>("append", 3, "write", 1, 1, 1),
     MakeCmdAttr<CommandSet>("set", -3, "write", 1, 1, 1),
+
+    MakeCmdAttr<CommandRawKVSet>("rawkvset", -4, "write", 1, 1, 1),
+
     MakeCmdAttr<CommandSetEX>("setex", 4, "write", 1, 1, 1),
     MakeCmdAttr<CommandPSetEX>("psetex", 4, "write", 1, 1, 1),
     MakeCmdAttr<CommandSetNX>("setnx", 3, "write", 1, 1, 1),

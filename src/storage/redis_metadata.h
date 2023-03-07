@@ -23,12 +23,12 @@
 #include <rocksdb/status.h>
 
 #include <atomic>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "encoding.h"
 #include "types/redis_stream_base.h"
-
 enum RedisType {
   kRedisNone,
   kRedisString,
@@ -58,7 +58,10 @@ enum RedisCommand {
 
 const std::vector<std::string> RedisTypeNames = {"none", "string", "hash",      "list",  "set",
                                                  "zset", "bitmap", "sortedint", "stream"};
-
+static std::map<RedisType, std::string> type_to_cmd = {
+    {kRedisString, "set"}, {kRedisList, "rpush"},    {kRedisHash, "hmset"},      {kRedisSet, "sadd"},
+    {kRedisZSet, "zadd"},  {kRedisBitmap, "setbit"}, {kRedisSortedint, "siadd"},
+};
 extern const char *kErrMsgWrongType;
 extern const char *kErrMsgKeyExpired;
 
