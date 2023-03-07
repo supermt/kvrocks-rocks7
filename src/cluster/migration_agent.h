@@ -56,7 +56,7 @@ class MigrationAgent : public Redis::Database {
   Status DumpContentToSST(SST_content* result_bucket, Ingestion_candidate* sst_map, bool force);
   void create_thread(std::thread** migration_worker, int migration_slot);
 
-  void call_to_iteration_agent();
+  void call_to_seek_and_insert_agent();
   void call_to_level_agent();
   void call_to_batch_agent();
   void call_to_fusion_agent();

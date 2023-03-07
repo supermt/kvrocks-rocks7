@@ -252,14 +252,14 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
 
 void MigrationAgent::call_to_level_agent() { std::cout << "Not supported yep" << std::endl; }
 void MigrationAgent::call_to_batch_agent() { std::cout << "Not supported yep" << std::endl; }
-void MigrationAgent::call_to_iteration_agent() { std::cout << "Not supported yep" << std::endl; }
+void MigrationAgent::call_to_seek_and_insert_agent() { std::cout << "Not supported yep" << std::endl; }
 void MigrationAgent::call_to_fusion_agent() { std::cout << "Not supported yep" << std::endl; }
 
 void MigrationAgent::create_thread(std::thread** migration_worker, int migrate_slot) {
   auto mode = MigrationMode(config_->batch_migrate);
   switch (mode) {
     case kSeekAndInsert:
-      *migration_worker = new std::thread(&MigrationAgent::call_to_iteration_agent, this);
+      *migration_worker = new std::thread(&MigrationAgent::call_to_seek_and_insert_agent, this);
       return;
     case kSeekAndDump:
       *migration_worker = new std::thread(&MigrationAgent::call_to_seek_and_dump_agent, this, migrate_slot, namespace_,

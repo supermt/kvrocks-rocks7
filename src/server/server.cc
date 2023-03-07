@@ -50,7 +50,6 @@ Server::Server(Engine::Storage *storage, Config *config) : storage_(storage), co
     stats_.commands_stats[iter.first].calls = 0;
     stats_.commands_stats[iter.first].latency = 0;
   }
-
 #ifdef ENABLE_OPENSSL
   // init ssl context
   if (config->tls_port) {
@@ -133,7 +132,7 @@ Status Server::Start() {
     // Create objects used for slot migration
     slot_migrate_ =
         std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
-    slot_import_ = new SlotImport(this);
+    //    slot_import_ = new SlotImport(this);
     // Create migrating thread
     auto s = slot_migrate_->CreateMigrateHandleThread();
     if (!s.IsOK()) {
