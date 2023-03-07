@@ -141,7 +141,7 @@ Status Server::Start() {
       return Status(Status::NotOK);
     }
   }
-  mg_agent = std::make_unique<Engine::MigrationAgent>(config_, storage_);
+  mg_agent = std::make_unique<Engine::MigrationAgent>(config_, storage_, this);
   for (const auto &worker : worker_threads_) {
     worker->Start();
   }

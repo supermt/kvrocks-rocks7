@@ -43,7 +43,9 @@ class MigrationAgent;
 constexpr const uint16_t PORT_LIMIT = 65535;
 
 enum SupervisedMode { kSupervisedNone = 0, kSupervisedAutoDetect, kSupervisedSystemd, kSupervisedUpStart };
+enum MigrationMode : int { kSeekAndInsert = 0, kSeekAndDump, kCompactAndMerge, kLevelMigration, kFusion };
 
+enum ParserState { ArrayLen, BulkLen, BulkData, Error, OneRspEnd };
 constexpr const char *TLS_AUTH_CLIENTS_NO = "no";
 constexpr const char *TLS_AUTH_CLIENTS_OPTIONAL = "optional";
 
@@ -138,7 +140,7 @@ struct Config {
 
   bool slot_id_encoded = false;
   bool cluster_enabled = false;
-  int batch_migrate = 0;  // 0 for iteration, 1 for batch, 2 for auto-choosing
+  int batch_migrate = kSeekAndInsert;
   int migration_threshold_level_num = 3;
   int migration_threshold_file_num = 5;
   std::string ingest_data_path = "/tmp/kvrocks";

@@ -4,9 +4,11 @@
 
 #include "migration_agent.h"
 
+#include "event_util.h"
+
 namespace Engine {
-MigrationAgent::MigrationAgent(Config* config, Storage* storage)
-    : Redis::Database(storage, rocksdb::kDefaultColumnFamilyName), slots_(0), dst_host_(""), dst_port_(0) {
+MigrationAgent::MigrationAgent(Config* config, Storage* storage, Server* svr)
+    : Redis::Database(storage, rocksdb::kDefaultColumnFamilyName), svr_(svr), slots_(0), dst_host_(""), dst_port_(0) {
   port_ = config->migration_agent_port;
   ip_ = config->migration_agent_ip;
 
@@ -28,6 +30,13 @@ inline void JoinThreads(std::vector<std::thread*>& thread_pool) {
 
 Status MigrationAgent::ExecuteMigrationInBackground(std::string dst_ip, int dst_port, std::vector<int>& slots) {
   std::thread* thread = nullptr;
+  auto s = Util::SockConnect(dst_ip, dst_port, &sock_fd_);
+  if (!s.IsOK()) {
+    return s;
+  }
+  assert(sock_fd_ != -1);
+  SetDstImportStatus(sock_fd_, kImportStart, kImportStart);
+
   thread = new std::thread(&MigrationAgent::publish_agent_command_multi, this);
   thread->detach();
   return Status::OK();
@@ -58,9 +67,10 @@ Status MigrationAgent::publish_agent_command(std::string dst_ip, int dst_port, i
 
   return Status::OK();
 }
-void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespace_,
-                                           const rocksdb::Snapshot* slot_snapshot_, std::string dst_ip, int dst_port) {
-  int16_t slot = migrate_slot;
+void MigrationAgent::call_to_seek_and_dump_agent(int migrate_slot, std::string namespace_,
+                                                 const rocksdb::Snapshot* slot_snapshot_, std::string dst_ip,
+                                                 int dst_port) {
+  int slot = migrate_slot;
   rocksdb::ReadOptions read_options;
   read_options.snapshot = slot_snapshot_;
   read_options.fill_cache = false;
@@ -72,8 +82,6 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
   LOG(INFO) << "[Agent] Iterate keys of slot, key's prefix: " << prefix;
   LOG(INFO) << "[Agent] Start migrating snapshot of slot " << slot;
   iter->Seek(prefix);
-
-  std::cout << "data" << std::endl;
 
   Slice current_migrate_key;
 
@@ -117,16 +125,20 @@ void MigrationAgent::call_to_iterate_agent(int migrate_slot, std::string namespa
   command_head = command_head + "ingest " + kMetadataColumnFamilyName + " true ";
   for (auto file : migration_ssts.meta_ssts) {
     std::string cmd = command_head + file;
-    s = Util::SockSend(target_fd, cmd);
+    s = Util::SockSend(sock_fd_, cmd);
+    if (!s.IsOK()) {
+      Fail(migrate_slot, sock_fd_);
+    }
   }
   command_head.clear();
   command_head = command_head + "ingest " + kSubkeyColumnFamilyName + " true ";
   for (auto file : migration_ssts.subkey_ssts) {
     std::string cmd = command_head + file;
-    s = Util::SockSend(target_fd, cmd);
+    s = Util::SockSend(sock_fd_, cmd);
   }
 
   LOG(INFO) << "[Agent] Succeed to migrate slot snapshot, slot: " << slot;
+  Finish(migrate_slot, sock_fd_);
 }
 
 Status MigrationAgent::ExtractOneRecord(const rocksdb::Slice& key, const Slice& meta_value, SST_content* result_bucket,
@@ -213,8 +225,8 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
   std::string subkey_sst = "";
   std::string migration_dir = "/tmp/migration/";
   env_->CreateDirIfMissing(migration_dir);
-  meta_sst = migration_dir + "meta"+std::to_string(Util::GetTimeStampMS()) + ".sst";
-  subkey_sst = migration_dir +"subkey"+ std::to_string(Util::GetTimeStampMS()) + ".sst";
+  meta_sst = migration_dir + "meta" + std::to_string(Util::GetTimeStampMS()) + ".sst";
+  subkey_sst = migration_dir + "subkey" + std::to_string(Util::GetTimeStampMS()) + ".sst";
 
   if (force) {
     db_ptr->CreateTableBuilder(meta_cf->GetID(), meta_cf, -1, result_bucket->meta_content, meta_sst);
@@ -234,26 +246,153 @@ Status MigrationAgent::DumpContentToSST(SST_content* result_bucket, Ingestion_ca
       sst_map->subkey_ssts.push_back(subkey_sst);
     }
   }
+
   return Status::NotOK;
 }
 
 void MigrationAgent::call_to_level_agent() { std::cout << "Not supported yep" << std::endl; }
 void MigrationAgent::call_to_batch_agent() { std::cout << "Not supported yep" << std::endl; }
+void MigrationAgent::call_to_iteration_agent() { std::cout << "Not supported yep" << std::endl; }
+void MigrationAgent::call_to_fusion_agent() { std::cout << "Not supported yep" << std::endl; }
+
 void MigrationAgent::create_thread(std::thread** migration_worker, int migrate_slot) {
-  switch (config_->batch_migrate) {
-    case 0:
-      *migration_worker = new std::thread(&MigrationAgent::call_to_iterate_agent, this, migrate_slot, namespace_,
+  auto mode = MigrationMode(config_->batch_migrate);
+  switch (mode) {
+    case kSeekAndInsert:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_iteration_agent, this);
+      return;
+    case kSeekAndDump:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_seek_and_dump_agent, this, migrate_slot, namespace_,
                                           this->storage_->GetDB()->GetSnapshot(), dst_host_, dst_port_);
       return;
-    case 1:
+    case kCompactAndMerge:
       *migration_worker = new std::thread(&MigrationAgent::call_to_batch_agent, this);
       return;
-    case 2:
+    case kLevelMigration:
       *migration_worker = new std::thread(&MigrationAgent::call_to_level_agent, this);
       return;
-    default:
-      *migration_worker = new std::thread(&MigrationAgent::call_to_level_agent, this);
+    case kFusion:
+      *migration_worker = new std::thread(&MigrationAgent::call_to_fusion_agent, this);
       return;
+  }
+}
+Status MigrationAgent::Finish(int migrate_slot, int sock_fd) {
+  //  if (sock_fd <= 0) {
+  //    LOG(ERROR) << "[agent] Empty socket";
+  //    return Status::NotOK;
+  //  }
+  bool import_success = SetDstImportStatus(sock_fd, kImportSuccess, migrate_slot);
+  if (!import_success) {
+    return Status(Status::NotOK, "Failed to notify import");
+  }
+  std::string dst_ip_port = dst_host_ + ":" + std::to_string(dst_port_);
+  Status st = svr_->cluster_->SetSlotMigrated(migrate_slot, dst_ip_port);
+
+  return st;
+}
+bool MigrationAgent::SetDstImportStatus(int sock_fd, int status, int migration_slot) {
+  if (sock_fd <= 0) return false;
+
+  std::string cmd =
+      Redis::MultiBulkString({"cluster", "import", std::to_string(migration_slot), std::to_string(status)});
+  auto s = Util::SockSend(sock_fd, cmd);
+  if (!s.IsOK()) {
+    LOG(ERROR) << "[migrate] Failed to send import command to destination, slot: " << migration_slot
+               << ", error: " << s.Msg();
+    return false;
+  }
+
+  return CheckResponseWithCounts(sock_fd, 1);
+}
+void MigrationAgent::Fail(int slot, int fd) { SetDstImportStatus(sock_fd_, kImportFailed, slot); }
+
+bool MigrationAgent::CheckResponseWithCounts(int sock_fd, int total) {
+  if (sock_fd < 0 || total <= 0) {
+    LOG(INFO) << "[migrate] Invalid args, sock_fd: " << sock_fd << ", count: " << total;
+    return false;
+  }
+
+  // Set socket receive timeout first
+  struct timeval tv;
+  tv.tv_sec = 1;
+  tv.tv_usec = 0;
+  setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+  // Start checking response
+  size_t bulk_len = 0;
+  int cnt = 0;
+  stat_ = ArrayLen;
+  UniqueEvbuf evbuf;
+  while (true) {
+    // Read response data from socket buffer to the event buffer
+    if (evbuffer_read(evbuf.get(), sock_fd, -1) <= 0) {
+      LOG(ERROR) << "[migrate] Failed to read response, Err: " + std::string(strerror(errno));
+      return false;
+    }
+
+    // Parse response data in event buffer
+    bool run = true;
+    while (run) {
+      switch (stat_) {
+        // Handle single string response
+        case ArrayLen: {
+          UniqueEvbufReadln line(evbuf.get(), EVBUFFER_EOL_CRLF_STRICT);
+          if (!line) {
+            LOG(INFO) << "[migrate] Event buffer is empty, read socket again";
+            run = false;
+            break;
+          }
+
+          if (line[0] == '-') {
+            LOG(ERROR) << "[migrate] Got invalid response: " + std::string(line.get())
+                       << ", line length: " << line.length;
+            stat_ = Error;
+          } else if (line[0] == '$') {
+            auto parse_result = ParseInt<uint64_t>(std::string(line.get() + 1, line.length - 1), 10);
+            if (!parse_result) {
+              LOG(ERROR) << "[migrate] Protocol Err: expect integer";
+              stat_ = Error;
+            } else {
+              bulk_len = *parse_result;
+              stat_ = bulk_len > 0 ? BulkData : OneRspEnd;
+            }
+          } else if (line[0] == '+' || line[0] == ':') {
+            stat_ = OneRspEnd;
+          } else {
+            LOG(ERROR) << "[migrate] Unexpected response: " << line.get();
+            stat_ = Error;
+          }
+
+          break;
+        }
+        // Handle bulk string response
+        case BulkData: {
+          if (evbuffer_get_length(evbuf.get()) < bulk_len + 2) {
+            LOG(INFO) << "[migrate] Bulk data in event buffer is not complete, read socket again";
+            run = false;
+            break;
+          }
+          // TODO(chrisZMF): Check tail '\r\n'
+          evbuffer_drain(evbuf.get(), bulk_len + 2);
+          bulk_len = 0;
+          stat_ = OneRspEnd;
+          break;
+        }
+        case OneRspEnd: {
+          cnt++;
+          if (cnt >= total) {
+            return true;
+          }
+          stat_ = ArrayLen;
+          break;
+        }
+        case Error: {
+          return false;
+        }
+        default:
+          break;
+      }
+    }
   }
 }
 }  // namespace Engine

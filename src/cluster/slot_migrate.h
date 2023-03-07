@@ -137,7 +137,6 @@ class SlotMigrate : public Redis::Database {
   Status MigrateIncrementData(std::unique_ptr<rocksdb::TransactionLogIterator> *iter, uint64_t endseq);
   Status SyncWalBeforeForbidSlot(void);
   Status SyncWalAfterForbidSlot(void);
-  void MigrateWaitCmmdsFinish(void);
   void SetForbiddenSlot(int16_t slot);
 
  private:
@@ -145,7 +144,6 @@ class SlotMigrate : public Redis::Database {
 
   MigrateStateMachine state_machine_;
 
-  enum ParserState { ArrayLen, BulkLen, BulkData, Error, OneRspEnd };
   ParserState stat_ = ArrayLen;
 
   enum class ThreadState { Uninitialized, Running, Terminated };
