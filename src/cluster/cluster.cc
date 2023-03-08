@@ -310,48 +310,36 @@ Status Cluster::ImportSlot(Redis::Connection *conn, int slot, int state) {
   if (!IsValidSlot(slot)) {
     return Status(Status::NotOK, errSlotOutOfRange);
   }
-  if (svr_->importing_slots_.find(slot) == svr_->importing_slots_.end()) {
-    // does not exist
-    svr_->importing_slots_.emplace(slot, new SlotImport(svr_));
-  }
 
   switch (state) {
     case kImportStart:
-      if (!svr_->importing_slots_[slot]->Start(conn->GetFD(), slot)) {
+      if (!svr_->slot_import_->Start(conn->GetFD(), slot)) {
         return Status(Status::NotOK, "Can't start importing slot " + std::to_string(slot));
       }
       // Set link importing
       conn->SetImporting();
-      myself_->importing_slot_.push_back(slot);
+      myself_->importing_slot_ = slot;
       // Set link error callback
-      if (!conn->close_cb_) {
-        conn->close_cb_ = std::bind(&SlotImport::StopForLinkError, svr_->importing_slots_[slot], conn->GetFD());
-      }
+      conn->close_cb_ = std::bind(&SlotImport::StopForLinkError, svr_->slot_import_, conn->GetFD());
       // Stop forbidding writing slot to accept write commands
       if (slot == svr_->slot_migrate_->GetForbiddenSlot()) svr_->slot_migrate_->ReleaseForbiddenSlot();
       LOG(INFO) << "[import] Start importing slot " << slot;
       break;
     case kImportSuccess:
-      if (!svr_->importing_slots_[slot]->Success(slot)) {
+      if (!svr_->slot_import_->Success(slot)) {
         LOG(ERROR) << "[import] Failed to set slot importing success, maybe slot is wrong"
-                   << ", received slot: " << slot << ", current slot: " << svr_->importing_slots_[slot]->GetSlot();
+                   << ", received slot: " << slot << ", current slot: " << svr_->slot_import_->GetSlot();
         return Status(Status::NotOK, "Failed to set slot " + std::to_string(slot) + " importing success");
       }
-      delete svr_->importing_slots_[slot];
-      svr_->importing_slots_.erase(slot);
       LOG(INFO) << "[import] Succeed to import slot " << slot;
-      myself_->importing_slot_.erase(std::find(myself_->importing_slot_.begin(), myself_->importing_slot_.end(), slot));
       break;
     case kImportFailed:
-      if (!svr_->importing_slots_[slot]->Fail(slot)) {
+      if (!svr_->slot_import_->Fail(slot)) {
         LOG(ERROR) << "[import] Failed to set slot importing error, maybe slot is wrong"
-                   << ", received slot: " << slot << ", current slot: " << svr_->importing_slots_[slot]->GetSlot();
+                   << ", received slot: " << slot << ", current slot: " << svr_->slot_import_->GetSlot();
         return Status(Status::NotOK, "Failed to set slot " + std::to_string(slot) + " importing error");
       }
       LOG(INFO) << "[import] Failed to import slot " << slot;
-      myself_->importing_slot_.erase(std::find(myself_->importing_slot_.begin(), myself_->importing_slot_.end(), slot));
-      delete svr_->importing_slots_[slot];
-      svr_->importing_slots_.erase(slot);
       break;
     default:
       return Status(Status::NotOK, errInvalidImportState);
@@ -675,10 +663,7 @@ Status Cluster::CanExecByMySelf(const Redis::CommandAttributes *attributes, cons
       return Status(Status::RedisExecErr, "Can't write to slot being migrated which is in write forbidden phase");
     }
     return Status::OK();  // I'm serving this slot
-  } else if (myself_ &&
-             std::find(myself_->importing_slot_.begin(), myself_->importing_slot_.end(), slot) !=
-                 myself_->importing_slot_.end() &&
-             conn->IsImporting()) {
+  } else if (myself_ && myself_->importing_slot_ && conn->IsImporting()) {
     // While data migrating, the topology of the destination node has not been changed.
     // The destination node has to serve the requests from the migrating slot,
     // although the slot is not belong to itself. Therefore, we record the importing slot
