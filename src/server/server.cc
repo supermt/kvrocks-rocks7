@@ -132,7 +132,7 @@ Status Server::Start() {
     // Create objects used for slot migration
     slot_migrate_ =
         std::make_unique<SlotMigrate>(this, config_->migrate_speed, config_->pipeline_size, config_->sequence_gap);
-    //    slot_import_ = new SlotImport(this);
+    slot_import_ = new SlotImport(this);
     // Create migrating thread
     auto s = slot_migrate_->CreateMigrateHandleThread();
     if (!s.IsOK()) {
